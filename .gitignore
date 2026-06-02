@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Generated artifacts (reproducible from source word lists)
+data/patterns_answers.npy
+data/bc_dataset.npz
+models/
+
+# OS
+.DS_Store
+
+# Harness local state (keep the rest of .claude/ trackable)
+.claude/scheduled_tasks.lock
