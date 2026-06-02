@@ -60,23 +60,41 @@ uv sync          # Python 3.12 venv + torch, numpy, tqdm
 
 The official word lists live in `data/` (answers + allowed guesses).
 
+## Two trained models
+
+Ablations showed Wordle doesn't need a sequence model — the candidate set is the
+sufficient statistic, and the solver already computes it. So there are two
+interchangeable policies (same `WordlePolicy` class, the `use_history` flag
+selects between them), and you can use either:
+
+| Model | Architecture | Params | File | Masked avg / win |
+|---|---|---:|---|---:|
+| **Transformer** (default) | history encoder + candidate-feature MLP | 1.04M | `models/policy.pt` | 3.61 / 99.4% |
+| **MLP** (`--mlp`) | candidate-feature MLP only (no attention) | 0.34M | `models/policy_mlp.pt` | 3.61 / 99.4% |
+
+They play identically; the MLP is 3× smaller and is the honest "minimum that
+fits the problem." See `references` in the commit history for the full ablation.
+
 ## Usage
 
 Play interactively (the app). It suggests a guess; you type the feedback Wordle
 gave you (`g`=green, `y`=yellow, `x`=gray), and it suggests the next one:
 
 ```bash
-uv run wordle-guesser                 # uses the trained transformer
-uv run wordle-guesser --teacher       # uses the entropy solver instead
+uv run wordle-guesser                 # transformer (default)
+uv run wordle-guesser --mlp           # the smaller candidate-only MLP
+uv run wordle-guesser --teacher       # the entropy solver, no model
 uv run wordle-guesser --no-mask       # let the model rank ALL words, not just valid ones
+uv run wordle-guesser --model PATH    # any checkpoint
 ```
 
-Reproduce the model from scratch:
+Reproduce the models from scratch:
 
 ```bash
-uv run python -m wordle_guesser.dataset   # self-play -> data/bc_dataset.npz
-uv run python -m wordle_guesser.train     # -> models/policy.pt  (MPS/CUDA/CPU auto)
-uv run python -m wordle_guesser.evaluate  # model vs teacher over all answers
+uv run python -m wordle_guesser.dataset                                    # self-play -> data/bc_dataset.npz
+uv run python -m wordle_guesser.train                                      # transformer -> models/policy.pt
+uv run python -m wordle_guesser.train --no-history --out models/policy_mlp.pt   # MLP alternative
+uv run python -m wordle_guesser.evaluate --model models/policy_mlp.pt      # model vs teacher over all answers
 ```
 
 Run the tests:

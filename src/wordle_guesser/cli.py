@@ -103,10 +103,14 @@ def run(policy, vocab, p, *, is_model: bool, max_guesses: int = MAX_GUESSES) -> 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Interactive Wordle solver.")
     ap.add_argument("--model", type=Path, default=MODELS_DIR / "policy.pt")
+    ap.add_argument("--mlp", action="store_true", help="use the candidate-only MLP (models/policy_mlp.pt)")
     ap.add_argument("--teacher", action="store_true", help="use the entropy solver, not the model")
     ap.add_argument("--no-mask", action="store_true", help="let the model rank all words, not just consistent ones")
     ap.add_argument("--device", default="auto")
     args = ap.parse_args()
+
+    if args.mlp:
+        args.model = MODELS_DIR / "policy_mlp.pt"
 
     vocab = load_vocabulary()
     p = load_pattern_matrix(vocab)

@@ -72,6 +72,9 @@ def main() -> None:
     ap.add_argument("--d-model", type=int, default=128)
     ap.add_argument("--layers", type=int, default=3)
     ap.add_argument("--heads", type=int, default=4)
+    ap.add_argument("--ff", type=int, default=256, help="feed-forward dim")
+    ap.add_argument("--no-history", action="store_true", help="drop the transformer; candidate features only")
+    ap.add_argument("--factored-head", action="store_true", help="letter-factored word head")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="auto")
     args = ap.parse_args()
@@ -95,9 +98,15 @@ def main() -> None:
     val_loader = DataLoader(subset(val_idx), batch_size=512)
 
     config = PolicyConfig(
-        n_words=len(vocab), d_model=args.d_model, nhead=args.heads, num_layers=args.layers
+        n_words=len(vocab),
+        d_model=args.d_model,
+        nhead=args.heads,
+        num_layers=args.layers,
+        dim_feedforward=args.ff,
+        use_history=not args.no_history,
+        factored_head=args.factored_head,
     )
-    model = WordlePolicy(config).to(device)
+    model = WordlePolicy(config, word_letters=vocab.letters).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"model: {n_params/1e6:.2f}M params")
 
