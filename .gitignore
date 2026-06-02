@@ -7,7 +7,7 @@ __pycache__/
 # Generated artifacts (reproducible from source word lists)
 data/patterns_answers.npy
 data/bc_dataset.npz
-models/
+# models/ is tracked so a fresh clone can play without training first
 
 # OS
 .DS_Store
