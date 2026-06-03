@@ -66,3 +66,8 @@ Play / train / test commands, the design story, and how to extend it live in
 1. **[Entropy teacher & cloned policies](docs/2026-06-01-entropy-teacher-and-cloned-policies.md)** — the baseline, the BC transformer, and the perceptron that matched it.
 2. **[Probing vs. openers](docs/2026-06-02-probing-and-openers.md)** — diagnosing the gap, the failed relabel, the SLATE opener.
 3. **[RL post-training to 100%](docs/2026-06-02-rl-post-training-to-100.md)** — teaching the net to probe with RL.
+
+Prefer it interactive? Open **[`site/index.html`](site/index.html)** in any browser — a
+beginner-friendly walkthrough of all five stages with live demos (the feedback engine, the
+shrinking candidate list, the probing trap) and a playable agent that solves any word in
+front of you. No build step; the real answer list runs in the page.
