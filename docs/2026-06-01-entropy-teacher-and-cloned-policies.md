@@ -1,6 +1,6 @@
 # Building the base: an entropy teacher and the nets that cloned it
 
-*Research log — 2026-06-01 to 06-02. The origin of the project. Part 1 of 3; continues in
+*Research log — 2026-06-01 to 06-02. Author: Ihar + Clawd. The origin of the project. Part 1 of 3; continues in
 [probing-and-openers](2026-06-02-probing-and-openers.md) →
 [rl-post-training-to-100](2026-06-02-rl-post-training-to-100.md).*
 
@@ -108,9 +108,9 @@ convention.
 ## 5. Where this left us
 
 A solid, tiny, honest player: **99.4% / 3.62**, matching the candidate-entropy ceiling, with
-a 0.34M-param net that needs no attention. But a stubborn ~0.5 gap to the teacher's 3.50
-remained, and ~7 answers were unwinnable while masked-to-candidates. Two follow-ups chased
-that gap:
+a 0.34M-param net that needs no attention. But a stubborn ~0.12 gap to the teacher's 3.50
+remained, and ~14 answers were unwinnable while masked-to-candidates (the SLATE opener in
+part 2 cut that to 7). Two follow-ups chased that gap:
 
 - **[probing-and-openers](2026-06-02-probing-and-openers.md)** — diagnosed the gap as
   *probing* (the teacher plays non-candidate words to split tied sets), showed it can't be

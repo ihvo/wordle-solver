@@ -115,6 +115,8 @@ policy played hybrid. The pattern matrix (`data/patterns_answers.npy`) rebuilds 
 
 ## Findings log (how we got here)
 
+> Full narrative with numbers: the **[docs/](docs/)** research log (3 parts).
+
 1. Transformer over `(guess, feedback)` history alone → **failed**, stuck at the
    random-consistent baseline (~4.06 avg). The candidate set, not the history, is the
    state. Adding `candidate_features` fixed it (masked 3.88).

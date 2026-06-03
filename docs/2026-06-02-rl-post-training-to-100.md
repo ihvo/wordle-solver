@@ -18,7 +18,7 @@ labeling one.* The full result and the one dead-end (a silent raw-play collapse)
 | BC, masked (old default) | 99.70% | 3.549 | 7 |
 | **RL, hybrid (new default)** | **100.00%** | **3.481** | **0** |
 | RL, raw / unmasked | 99.31% | 3.485 | 16 |
-| Entropy teacher (full pool) | 100.00% | 3.454 | 0 |
+| Entropy teacher (full pool) | 100.00% | 3.4955 | 0 |
 
 ---
 
@@ -187,8 +187,10 @@ same perfect win rate.
 - **It leans on the rail** (exact candidate tracking), which the product always has. The
   net's own unaided raw play is ~99.3%. The probe itself, though, is now the *net's* — the
   only solver help retained is enumeration, not entropy.
-- **Avg 3.481 > teacher's 3.454.** Win rate was the goal; trimming the average is future
-  work (the reward already favors speed — a longer, lower-LR tail should help).
+- **Average isn't at the optimum.** Hybrid avg 3.481 already edges the greedy teacher's
+  3.4955, but the theoretical optimum is ~3.42 (needs search or the allowed-guess list). Win
+  rate was the goal; trimming the average toward ~3.45 is future work (the reward already
+  favors speed — a longer, lower-LR tail should help).
 
 ## 9. Next
 
