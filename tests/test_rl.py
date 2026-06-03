@@ -93,3 +93,16 @@ def test_raw_policy_probes_without_the_rail(vocab, pmatrix):
     for w in ("pound", "bound", "vaunt", "watch", "foyer", "taste", "wound"):
         _g, _c, solved = play_game(vocab.encode(w), raw, pmatrix, len(vocab))
         assert solved, f"raw policy lost {w!r}"
+
+
+def test_xattn_policy_plays_from_tokens_only(vocab, pmatrix):
+    """The history-only net solves traps playing raw, with NO candidate set fed in."""
+    ckpt = MODELS_DIR / "policy_xattn.pt"
+    if not ckpt.exists():
+        pytest.skip("xattn checkpoint not built yet (train with --xattn)")
+    model, _ = load_checkpoint(ckpt)
+    assert model.config.xattn
+    raw = ModelPolicy(model, vocab, mask_to_candidates=False, probe_when_stuck=False)
+    for w in ("pound", "bound", "wound", "watch", "vaunt"):
+        _g, _c, solved = play_game(vocab.encode(w), raw, pmatrix, len(vocab))
+        assert solved, f"xattn policy lost {w!r}"

@@ -60,16 +60,17 @@ def evaluate_model(
         tok_arrays = [encode_state(guesses[i], codes[i], letters) for i in active]
         tokens, kpm = pad_batch(tok_arrays)
         feats = np.stack([candidate_features(candidates[i], letters, rem) for i in active])
-        logits = (
+        # Chunk the forward: the xattn head builds a (B, n_words, d) tensor, so all
+        # 2315 active games at once would blow memory. Harmless for the other models.
+        chunk = 64 if getattr(model.config, "xattn", False) else len(active)
+        logits = np.concatenate([
             model(
-                torch.from_numpy(tokens).to(device),
-                torch.from_numpy(kpm).to(device),
-                torch.from_numpy(feats).to(device),
-            )
-            .float()
-            .cpu()
-            .numpy()
-        )
+                torch.from_numpy(tokens[s : s + chunk]).to(device),
+                torch.from_numpy(kpm[s : s + chunk]).to(device),
+                torch.from_numpy(feats[s : s + chunk]).to(device),
+            ).float().cpu().numpy()
+            for s in range(0, len(active), chunk)
+        ])
         still_active = []
         for row, i in enumerate(active):
             lg = logits[row]

@@ -32,6 +32,23 @@ def test_candidate_only_is_smaller_and_works():
     assert mlp(*_batch()).shape == (4, N)
 
 
+def test_xattn_history_only_ignores_candidate_features():
+    """The cross-attention head reads only the history — candidate features must
+    not affect its output."""
+    words = load_vocabulary().letters[:N]
+    m = WordlePolicy(PolicyConfig(n_words=N, xattn=True), word_letters=words).eval()
+    tokens = torch.randint(0, 78, (4, MAX_LEN))
+    mask = torch.zeros(4, MAX_LEN, dtype=torch.bool)
+    mask[:, 4:] = True
+    out = m(tokens, mask, torch.zeros(4, CAND_DIM))
+    assert out.shape == (4, N)
+    # two very different "feature" inputs -> identical logits (features are ignored)
+    with torch.no_grad():
+        a = m(tokens, mask, torch.zeros(4, CAND_DIM))
+        b = m(tokens, mask, torch.rand(4, CAND_DIM) * 9)
+    assert torch.allclose(a, b, atol=1e-6)
+
+
 def test_factored_head_forward_and_roundtrip(tmp_path):
     words = load_vocabulary().letters[:N]
     cfg = PolicyConfig(n_words=N, factored_head=True)

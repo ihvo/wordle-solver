@@ -409,6 +409,20 @@
         (<code>policy_raw.pt</code>, 100%) — so the rail is now an optional safety net (see <i>Rail-free</i>).</p>
     </div>
 
+    <!-- History-only cross-attention -->
+    <div class="card">
+      <h3 style="margin-top:0">History-only net <span class="mtag">no solver · 0.5M params</span></h3>
+      <div class="diagram" id="archXattn"></div>
+      <p style="margin-bottom:0">The experiment from the <i>Rail-free</i> follow-up taken to its limit: drop the
+        candidate features <b>entirely</b> and read only the move history. The catch is the readout — a single
+        summary vector can't say which of 2,315 words are still consistent. So each word (embedded from its
+        letters) is the <b>query</b> in a <b>cross-attention</b> over the encoded history (the keys/values), and
+        is scored against its own attended context. That per-word × history interaction lets the net check its
+        own candidacy. Played raw it reaches <b>99.87% from tokens alone</b> — no candidate set fed in — proving
+        the solver's tracking isn't fundamentally required. (The last ~0.1%, rare/double-letter words, is the
+        brittle bit of exact filtering a net only approximates.)</p>
+    </div>
+
     <div class="diaglegend">
       <span><i class="in"></i>input / encoding</span>
       <span><i class="param"></i>learned parameters</span>

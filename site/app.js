@@ -420,6 +420,21 @@ lineChart($("rlChart"),
     s += `<text x="12" y="212" style="font-weight:600;font-size:11px;font-family:${MONO};fill:#6b7075">turn 1 is forced to the fixed opener (SLATE), bypassing the net</text>`;
     set("archHybrid", svg(804, 230, m, s));
   })();
+
+  // History-only cross-attention — no candidate features
+  (function () {
+    const m = "ahX", h = 52; let s = "";
+    s += box(12, 24, 150, h, "History tokens", "(g,fb)×≤5", "in");
+    s += box(190, 24, 180, h, "Transformer encoder", "embed+pos · 3×", "param");
+    s += box(12, 132, 180, h, "Word ← letters", "(n_words, d)", "param");
+    s += box(424, 78, 184, h, "cross-attention", "word attends history", "param");
+    s += box(636, 78, 150, h, "logits", "per word", "out");
+    s += arrow(162, 50, 190, 50, m);
+    s += arrow(370, 50, 424, 95, m); s += tag(400, 64, "K,V", "#6b7075");
+    s += arrow(192, 158, 424, 117, m); s += tag(300, 132, "query", "#6b7075");
+    s += arrow(608, 104, 636, 104, m);
+    set("archXattn", svg(800, 208, m, s));
+  })();
 })();
 
 /* ===================================================================== */

@@ -34,7 +34,49 @@ class PolicyConfig:
     cand_dim: int = CAND_DIM
     use_history: bool = True
     factored_head: bool = False
+    xattn: bool = False  # history-only: words cross-attend the encoded history (no candidate features)
     opener: str | None = None  # fixed turn-1 word; the net can't learn a 1-example opening
+
+
+class CrossAttnWordHead(nn.Module):
+    """History-only readout. Each vocabulary word (embedded from its letters)
+    cross-attends the encoded ``(guess, feedback)`` history and is scored against
+    its own attended context. The per-word × history interaction is what lets the
+    net check candidacy itself — no solver-computed candidate set is fed in.
+    """
+
+    def __init__(self, d: int, n_words: int, nhead: int, word_letters: np.ndarray | None):
+        super().__init__()
+        self.nhead = nhead
+        self.dh = d // nhead
+        self.letter_emb = nn.Embedding(WORD_LEN * 26, d)
+        self.q = nn.Linear(d, d)
+        self.k = nn.Linear(d, d)
+        self.v = nn.Linear(d, d)
+        self.out = nn.Linear(d, d)
+        self.word_bias = nn.Parameter(torch.zeros(n_words))
+        idx = np.zeros((n_words, WORD_LEN), dtype=np.int64)
+        if word_letters is not None:
+            idx = (np.arange(WORD_LEN) * 26 + word_letters).astype(np.int64)
+        self.register_buffer("word_letter_idx", torch.from_numpy(idx))
+
+    def word_embeddings(self) -> torch.Tensor:
+        return self.letter_emb(self.word_letter_idx).sum(dim=1)  # (n_words, d)
+
+    def forward(self, hist, key_padding_mask) -> torch.Tensor:
+        """hist (B,L,d) encoded history; mask (B,L) True=pad -> logits (B,n_words)."""
+        b, length, _ = hist.shape
+        w = self.word_embeddings()                                # (n, d)
+        n, h, dh = w.shape[0], self.nhead, self.dh
+        q = self.q(w).view(n, h, dh)
+        k = self.k(hist).view(b, length, h, dh)
+        v = self.v(hist).view(b, length, h, dh)
+        scores = torch.einsum("nhe,blhe->bhnl", q, k) / (dh ** 0.5)   # (B,h,n,L)
+        if key_padding_mask is not None:
+            scores = scores.masked_fill(key_padding_mask[:, None, None, :], float("-inf"))
+        ctx = torch.einsum("bhnl,blhe->bnhe", scores.softmax(-1), v)  # (B,n,h,dh)
+        ctx = self.out(ctx.reshape(b, n, h * dh))                    # (B,n,d)
+        return torch.einsum("nd,bnd->bn", w, ctx) + self.word_bias    # (B, n_words)
 
 
 class WordlePolicy(nn.Module):
@@ -45,8 +87,8 @@ class WordlePolicy(nn.Module):
         self.config = config
         d = config.d_model
 
-        # --- history path (optional) ---
-        if config.use_history:
+        # --- history path (built when used directly or by the cross-attn head) ---
+        if config.use_history or config.xattn:
             self.tok_emb = nn.Embedding(config.n_tokens, d, padding_idx=TOK_PAD)
             self.pos_emb = nn.Embedding(config.max_len, d)
             layer = nn.TransformerEncoderLayer(
@@ -62,7 +104,12 @@ class WordlePolicy(nn.Module):
             self.norm = nn.LayerNorm(d)
             self.register_buffer("_positions", torch.arange(config.max_len), persistent=False)
 
-        # --- candidate-set path (always) ---
+        # --- history-only cross-attention head: no candidate path at all ---
+        if config.xattn:
+            self.word_head = CrossAttnWordHead(d, config.n_words, config.nhead, word_letters)
+            return
+
+        # --- candidate-set path (always, unless xattn) ---
         self.cand_proj = nn.Sequential(
             nn.Linear(config.cand_dim, d), nn.GELU(), nn.Linear(d, d)
         )
@@ -85,7 +132,16 @@ class WordlePolicy(nn.Module):
         return self.letter_emb(self.word_letter_idx).sum(dim=1)  # (n_words, d)
 
     def forward(self, tokens, key_padding_mask, cand_feats) -> torch.Tensor:
-        """tokens (B,L) long; mask (B,L) bool True=pad; cand_feats (B,156) -> (B,n_words)."""
+        """tokens (B,L) long; mask (B,L) bool True=pad; cand_feats (B,156) -> (B,n_words).
+
+        In ``xattn`` mode ``cand_feats`` is ignored — the policy reads only the history.
+        """
+        if self.config.xattn:
+            pos = self._positions[: tokens.size(1)]
+            x = self.tok_emb(tokens) + self.pos_emb(pos)[None, :, :]
+            hist = self.encoder(x, src_key_padding_mask=key_padding_mask)
+            return self.word_head(hist, key_padding_mask)
+
         parts = []
         if self.config.use_history:
             pos = self._positions[: tokens.size(1)]

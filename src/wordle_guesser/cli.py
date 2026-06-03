@@ -104,6 +104,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Interactive Wordle solver.")
     ap.add_argument("--model", type=Path, default=None, help="checkpoint path (overrides the flags below)")
     ap.add_argument("--rl", action="store_true", help="RL policy played hybrid (models/policy_rl.pt)")
+    ap.add_argument("--xattn", action="store_true", help="history-only net, no candidate features (models/policy_xattn.pt)")
     ap.add_argument("--bc", action="store_true", help="behavior-cloned transformer (models/policy.pt)")
     ap.add_argument("--mlp", action="store_true", help="candidate-only MLP (models/policy_mlp.pt)")
     ap.add_argument("--teacher", action="store_true", help="use the entropy solver, not the model")
@@ -126,6 +127,8 @@ def main() -> None:
         model_path, mask, probe = args.model, not args.no_mask, False
     elif args.rl:
         model_path, mask, probe = MODELS_DIR / "policy_rl.pt", True, True
+    elif args.xattn:        # history-only: reads tokens, ignores candidate features
+        model_path, mask, probe = MODELS_DIR / "policy_xattn.pt", False, False
     elif args.bc:
         model_path, mask, probe = MODELS_DIR / "policy.pt", True, False
     elif args.mlp:

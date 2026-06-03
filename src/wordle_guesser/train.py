@@ -75,6 +75,7 @@ def main() -> None:
     ap.add_argument("--ff", type=int, default=256, help="feed-forward dim")
     ap.add_argument("--no-history", action="store_true", help="drop the transformer; candidate features only")
     ap.add_argument("--factored-head", action="store_true", help="letter-factored word head")
+    ap.add_argument("--xattn", action="store_true", help="history-only: words cross-attend the history, no candidate features")
     ap.add_argument("--opener", default=None, help="fixed turn-1 word, forced at inference (match the dataset's --opener)")
     ap.add_argument("--init", type=Path, default=None, help="warm-start from this checkpoint (same architecture)")
     ap.add_argument("--seed", type=int, default=0)
@@ -100,7 +101,7 @@ def main() -> None:
         return TensorDataset(tokens[idx], mask[idx], feats[idx], tgt_idx[idx], tgt_w[idx])
 
     train_loader = DataLoader(subset(train_idx), batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(subset(val_idx), batch_size=512)
+    val_loader = DataLoader(subset(val_idx), batch_size=max(args.batch_size, 64))
 
     config = PolicyConfig(
         n_words=len(vocab),
@@ -111,6 +112,7 @@ def main() -> None:
         cand_dim=feats.size(1),  # 156, or 170 with --state-aug features
         use_history=not args.no_history,
         factored_head=args.factored_head,
+        xattn=args.xattn,
         opener=opener,
     )
     model = WordlePolicy(config, word_letters=vocab.letters).to(device)
