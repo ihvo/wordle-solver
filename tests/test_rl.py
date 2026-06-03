@@ -103,6 +103,7 @@ def test_xattn_policy_plays_from_tokens_only(vocab, pmatrix):
     model, _ = load_checkpoint(ckpt)
     assert model.config.xattn
     raw = ModelPolicy(model, vocab, mask_to_candidates=False, probe_when_stuck=False)
-    for w in ("pound", "bound", "wound", "watch", "vaunt"):
+    # incl. rajah/witch — the brittle double-letter / family traps the feature + raw-GRPO closed
+    for w in ("pound", "bound", "wound", "watch", "vaunt", "patty", "sushi", "rajah", "witch"):
         _g, _c, solved = play_game(vocab.encode(w), raw, pmatrix, len(vocab))
         assert solved, f"xattn policy lost {w!r}"

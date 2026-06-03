@@ -11,10 +11,11 @@
 Every policy so far is fed a **candidate-set summary** the solver computes each turn. But the
 candidate set is a deterministic function of the `(guess, feedback)` history — the information
 is already in the tokens. So: can a net drop the solver's tracking and play from the raw
-history alone? With the right readout, **yes** — a 0.5M-param history-only net reaches
-**99.87% / 3 losses playing token-only** (no candidate features, proven by random-feature
-invariance). The original history-only net sat at random (~4.06); the unlock was an
-architecture change, not size.
+history alone? **Yes — and perfectly.** A 0.5M-param history-only net reaches **100% / 0 losses
+playing token-only** (no candidate features, proven by random-feature invariance), avg 3.464.
+The original history-only net sat at random (~4.06); three things got it to 100%: a
+**cross-attention readout** (the structural unlock), a **duplicate-letter feature** derived from
+the guess, and a **raw-GRPO** polish that optimised the win objective directly.
 
 ## 1. Why "the info is in the tokens" wasn't enough originally
 
@@ -38,37 +39,53 @@ We drop `candidate_features` entirely and feed **only tokens**, then train BC + 
 
 ## 3. Result
 
-`models/policy_xattn.pt` (0.5M params, history-only), over all 2,315:
+`models/policy_xattn.pt` (0.5M params, history-only), over all 2,315 — **raw == hybrid**:
 
 | Mode | Win | Avg | Losses |
 |---|---|---|---|
-| **raw (token-only)** | **99.87%** | **3.478** | **3** (`fjord, patty, sushi`) |
-| hybrid (rail on top) | 100.0% | 3.465 | 0 |
-| masked | 99.27% | 3.59 | 17 |
+| **raw (token-only)** | **100.0%** | **3.464** | **0** |
+| masked | ~99.4% | 3.55 | — |
 
 Token-only is **proven**: feeding random vs. zero features (even different dims) gives identical
-logits — the head ignores them; the decision is the history alone. From *random* to *99.87%*,
-at half the parameters of the feature net.
+logits — the head ignores them; the decision is the history alone. From *random* to *perfect*, at
+half the parameters of the feature net, with **no candidate set ever computed for the policy**.
 
-## 4. Honest notes
+## 4. Closing the last few — and the trap on the way
 
-- **I bet against this.** Going in I expected brittle filtering to wreck it; it reached 99.87%.
-  The cross-attention readout was the whole story.
-- **The DAgger round to close the last 3 *regressed* it** — raw 99.87 → 99.22 while val-accuracy
-  *rose* (0.636 → 0.725). The project's standing gotcha (val-acc ≠ game performance) plus a
-  capacity-limited net overfitting the imitation target. The first net was better; we kept it.
-- **The residual 3 are the brittle bits:** `fjord` (rare letters), `patty`/`sushi` (double
-  letters — duplicate handling is the fiddliest part of the filter to approximate). The exact
-  solver has zero such error. Closing them needs **game-performance-based selection** (RL on the
-  net, or eval-selected checkpoints), not more imitation — that's open.
-- **The environment still gives feedback.** We removed the solver's *candidate tracking*, not
-  the game; Wordle still colors each guess. And 99.87% ≠ 100% — this is a *near*-solver-free net,
-  a research result, not the shipped default (`policy_raw.pt`, 100%, still uses solver features).
+A first cross-attention net (DAgger'd on the hybrid expert's actions) reached **99.87% / 3 losses**
+token-only — already a strong result. Two more steps closed it:
+
+- **Duplicate-letter feature (`--letter-count`).** The brittle losses were rare/double-letter
+  words (`fjord, patty, sushi`); duplicate handling is the fiddliest part of the filter to
+  approximate. We add a per-token feature = *how many times this letter appears in its own guess*
+  — a function of the guess (the net already sees it), so still solver-free. It cleared the
+  double-letter cases.
+- **Raw-GRPO (`rl_raw.py`).** Imitation and val-accuracy stop helping at the margin, so optimise
+  the win objective directly: sample raw at every turn, reward = `solved ? (7-turns) : 0`, GRPO
+  baseline, the full-pool expert seeded into each group on the hard answers, KL-anchored to the
+  BC net. It closed the residual (`rajah, witch`) → **100% / 0 losses**.
+
+`99.87 → (feature) → ~99.9 → (raw-GRPO) → 100`.
+
+## 5. Honest notes
+
+- **I bet against this twice, and was wrong twice.** First that brittle filtering would wreck a
+  history-only net (it hit 99.87%); then that the last losses wouldn't close without big cost (the
+  feature + a short RL polish closed them to 0).
+- **One real trap on the way:** a naive **DAgger round regressed** the net — raw 99.87 → 99.22
+  while *val-accuracy rose* (0.636 → 0.725). The standing gotcha (val-acc ≠ game performance). The
+  fix that mattered was **selecting on raw win rate** (`train --select-play`), not imitation loss.
+- **Margins are device-noisy.** At exactly this level, MPS vs CPU argmax can flip a borderline
+  game; we verify on CPU (deterministic) — 0 losses there.
+- **The environment still gives feedback.** We removed the solver's *candidate tracking*, not the
+  game; Wordle still colors each guess. The solver-free net (`--xattn`) is a research variant; the
+  shipped default stays `policy_raw.pt`.
 
 ## Lessons
 
 1. **A capability "the net can't learn" is often a readout-structure problem.** Same tokens, same
    budget — only the head changed, and history-only went from random to near-perfect.
-2. **Val-accuracy lies, every time we forget it.** It rose while play fell; rank on games.
-3. **You can move the solver's exact work into a net, but it stays an approximation** — fine for
-   99.9%, costly for the last 0.1% where exactness matters (duplicate letters).
+2. **Then it's a representation problem, then an objective problem.** The duplicate feature handed
+   the net the fiddly sub-computation; raw-GRPO optimised the thing we actually cared about. Each
+   layer of the gap had a different fix.
+3. **Val-accuracy lies, every time we forget it.** It rose while play fell; rank on games.

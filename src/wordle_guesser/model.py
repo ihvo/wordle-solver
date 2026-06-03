@@ -35,6 +35,7 @@ class PolicyConfig:
     use_history: bool = True
     factored_head: bool = False
     xattn: bool = False  # history-only: words cross-attend the encoded history (no candidate features)
+    letter_count: bool = False  # add a per-token "how many of this letter in its guess" embedding (helps duplicates)
     opener: str | None = None  # fixed turn-1 word; the net can't learn a 1-example opening
 
 
@@ -103,6 +104,8 @@ class WordlePolicy(nn.Module):
             self.encoder = nn.TransformerEncoder(layer, config.num_layers, enable_nested_tensor=False)
             self.norm = nn.LayerNorm(d)
             self.register_buffer("_positions", torch.arange(config.max_len), persistent=False)
+            if config.letter_count:  # 0 = none/pad; 1..5 = times this letter appears in its guess
+                self.count_emb = nn.Embedding(6, d)
 
         # --- history-only cross-attention head: no candidate path at all ---
         if config.xattn:
@@ -131,22 +134,38 @@ class WordlePolicy(nn.Module):
     def _word_embeddings(self) -> torch.Tensor:
         return self.letter_emb(self.word_letter_idx).sum(dim=1)  # (n_words, d)
 
+    def _letter_counts(self, tokens: torch.Tensor) -> torch.Tensor:
+        """For each history token, how many times its letter appears in its own guess
+        (1..5; 0 for START/PAD). A function of the guess only — solver-free; it hands
+        the net the duplicate-letter bookkeeping that exact filtering hinges on."""
+        length = tokens.size(1)
+        lett = tokens // 3                                   # (B,L); 26 = START/PAD
+        real = lett < 26
+        grp = (self._positions[:length] - 1) // 5            # guess index per slot (-1 for START)
+        same_grp = grp[:, None] == grp[None, :]              # (L,L)
+        same_let = lett[:, :, None] == lett[:, None, :]       # (B,L,L)
+        cnt = (same_grp[None] & same_let & real[:, None, :]).sum(-1)  # (B,L)
+        return (cnt.clamp(max=5) * real).long()
+
+    def _embed(self, tokens: torch.Tensor) -> torch.Tensor:
+        pos = self._positions[: tokens.size(1)]
+        x = self.tok_emb(tokens) + self.pos_emb(pos)[None, :, :]
+        if self.config.letter_count:
+            x = x + self.count_emb(self._letter_counts(tokens))
+        return x
+
     def forward(self, tokens, key_padding_mask, cand_feats) -> torch.Tensor:
         """tokens (B,L) long; mask (B,L) bool True=pad; cand_feats (B,156) -> (B,n_words).
 
         In ``xattn`` mode ``cand_feats`` is ignored — the policy reads only the history.
         """
         if self.config.xattn:
-            pos = self._positions[: tokens.size(1)]
-            x = self.tok_emb(tokens) + self.pos_emb(pos)[None, :, :]
-            hist = self.encoder(x, src_key_padding_mask=key_padding_mask)
+            hist = self.encoder(self._embed(tokens), src_key_padding_mask=key_padding_mask)
             return self.word_head(hist, key_padding_mask)
 
         parts = []
         if self.config.use_history:
-            pos = self._positions[: tokens.size(1)]
-            x = self.tok_emb(tokens) + self.pos_emb(pos)[None, :, :]
-            x = self.encoder(x, src_key_padding_mask=key_padding_mask)
+            x = self.encoder(self._embed(tokens), src_key_padding_mask=key_padding_mask)
             parts.append(self.norm(x[:, 0]))  # START summary
         parts.append(self.cand_proj(cand_feats))
         z = torch.cat(parts, dim=-1) if len(parts) > 1 else parts[0]

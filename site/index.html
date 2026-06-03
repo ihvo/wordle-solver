@@ -418,9 +418,10 @@
         summary vector can't say which of 2,315 words are still consistent. So each word (embedded from its
         letters) is the <b>query</b> in a <b>cross-attention</b> over the encoded history (the keys/values), and
         is scored against its own attended context. That per-word × history interaction lets the net check its
-        own candidacy. Played raw it reaches <b>99.87% from tokens alone</b> — no candidate set fed in — proving
-        the solver's tracking isn't fundamentally required. (The last ~0.1%, rare/double-letter words, is the
-        brittle bit of exact filtering a net only approximates.)</p>
+        own candidacy. Played raw it reaches <b>100% from tokens alone</b> — no candidate set ever computed for
+        the policy — proving the solver's tracking isn't required. Getting there took three different fixes: the
+        cross-attention readout (→99.87%), a solver-free <b>duplicate-letter feature</b> (the brittle cases), and
+        a <b>raw-RL</b> polish optimising the win objective directly (the last two losses).</p>
     </div>
 
     <div class="diaglegend">

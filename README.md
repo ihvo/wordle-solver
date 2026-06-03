@@ -72,7 +72,7 @@ Play / train / test commands, the design story, and how to extend it live in
 2. **[Probing vs. openers](docs/2026-06-02-probing-and-openers.md)** — diagnosing the gap, the failed relabel, the SLATE opener.
 3. **[RL post-training to 100%](docs/2026-06-02-rl-post-training-to-100.md)** — teaching the net to probe with RL.
 4. **[Deprecating the rail](docs/2026-06-03-deprecating-the-rail.md)** — C/R features + DAgger fold the rail into the net; raw play hits 100%.
-5. **[A solver-free net](docs/2026-06-03-solver-free-net.md)** — a history-only cross-attention net plays 99.87% from the tokens alone, no candidate set.
+5. **[A solver-free net](docs/2026-06-03-solver-free-net.md)** — a history-only cross-attention net plays 100% from the tokens alone, no candidate set.
 
 Prefer it interactive? Open **[`site/index.html`](site/index.html)** in any browser — a
 beginner-friendly walkthrough of all five stages with live demos (the feedback engine, the

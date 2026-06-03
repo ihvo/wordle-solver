@@ -76,6 +76,8 @@ def main() -> None:
     ap.add_argument("--no-history", action="store_true", help="drop the transformer; candidate features only")
     ap.add_argument("--factored-head", action="store_true", help="letter-factored word head")
     ap.add_argument("--xattn", action="store_true", help="history-only: words cross-attend the history, no candidate features")
+    ap.add_argument("--letter-count", action="store_true", help="add a per-token letter-count-in-guess embedding (helps duplicates)")
+    ap.add_argument("--select-play", action="store_true", help="checkpoint on raw game win-rate, not val top-1 accuracy")
     ap.add_argument("--opener", default=None, help="fixed turn-1 word, forced at inference (match the dataset's --opener)")
     ap.add_argument("--init", type=Path, default=None, help="warm-start from this checkpoint (same architecture)")
     ap.add_argument("--seed", type=int, default=0)
@@ -113,6 +115,7 @@ def main() -> None:
         use_history=not args.no_history,
         factored_head=args.factored_head,
         xattn=args.xattn,
+        letter_count=args.letter_count,
         opener=opener,
     )
     model = WordlePolicy(config, word_letters=vocab.letters).to(device)
@@ -126,7 +129,16 @@ def main() -> None:
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
 
-    best_acc = -1.0
+    # --select-play ranks checkpoints by actual raw game win-rate, not val top-1
+    # accuracy (which diverges from play — the recurring gotcha). Lazy import to
+    # avoid the train<->evaluate import cycle.
+    play_p = None
+    if args.select_play:
+        from .evaluate import evaluate_model, summarize
+        from .solver import load_pattern_matrix
+        play_p = load_pattern_matrix(vocab)
+
+    best_key = (-1.0, 0.0)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -144,15 +156,20 @@ def main() -> None:
         sched.step()
 
         train_loss = running / len(train_idx)
-        val_acc = evaluate(model, val_loader, device)
+        if args.select_play:  # select on raw win-rate, then fewer guesses, then losses
+            m = summarize(evaluate_model(model, vocab, play_p, device, mask_to_candidates=False))
+            key, metric = (m["win_rate"], -m["avg_guesses"]), f"raw {m['win_rate']*100:.2f}% / {m['losses']} loss"
+        else:
+            va = evaluate(model, val_loader, device)
+            key, metric = (va, 0.0), f"val_acc {va:.4f}"
         flag = ""
-        if val_acc > best_acc:
-            best_acc = val_acc
+        if key > best_key:
+            best_key = key
             save_checkpoint(args.out, model, vocab.words)
             flag = "  <- saved"
-        print(f"epoch {epoch:2d}  train_loss {train_loss:.4f}  val_acc {val_acc:.4f}{flag}")
+        print(f"epoch {epoch:2d}  train_loss {train_loss:.4f}  {metric}{flag}")
 
-    print(f"best val_acc {best_acc:.4f}; checkpoint at {args.out}")
+    print(f"best {best_key}; checkpoint at {args.out}")
 
 
 if __name__ == "__main__":

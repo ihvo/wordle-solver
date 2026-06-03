@@ -68,7 +68,7 @@ the raw policy (`policy_raw.pt`) playing pure argmax. The pattern matrix rebuild
 |---|---|
 | Best play (100%, default) | raw — `models/policy_raw.pt` (no flag; pure argmax, no rail) |
 | The RL hybrid policy (rail on) | `--rl` (`models/policy_rl.pt`) |
-| Solver-free, history-only (99.87%, research) | `--xattn` (`models/policy_xattn.pt`, no candidate features) |
+| Solver-free, history-only (100%, research) | `--xattn` (`models/policy_xattn.pt`, no candidate features) |
 | Guaranteed-valid suggestions | `--safe` (overlay the rail on any model) |
 | The behavior-cloned transformer | `--bc` (`models/policy.pt`, masked) |
 | Smallest model | MLP — `--mlp` (`use_history=False`, masked) |
@@ -150,15 +150,17 @@ the raw policy (`policy_raw.pt`) playing pure argmax. The pattern matrix rebuild
    observable. Adding C/R (→170-d) and **DAgger**-ing the raw net on the hybrid expert took raw
    99.3→99.7→99.9→**100** over three rounds. Imitation sufficed once the decision was in the
    input; no reward needed. The forced opener stays.
-6. **The solver's candidate tracking isn't required either — 99.87% from tokens alone.** The
+6. **The solver's candidate tracking isn't required either — 100% from tokens alone.** The
    candidate set is a function of the history, so a history-only net can play without it — but
    only with the right readout: `CrossAttnWordHead` (`--xattn`) makes each word a query that
    cross-attends the encoded history, so it can check its own candidacy (a fixed summary →
-   linear head can't). Original history-only sat at random (~4.06); this reaches **99.87% raw /
-   3 losses / 0.5M params** (`policy_xattn.pt`), proven token-only. The residual 3 (`fjord,
-   patty, sushi` — rare/double letters) are the brittle bit of exact filtering; a DAgger round
-   *regressed* it (val-acc rose, play fell), so closing them needs game-selected training. It's
-   a research variant, not the default. `evaluate_model` chunks the per-word-attention forward.
+   linear head can't). The gap closed in three layers: readout (DAgger → 99.87%), a
+   solver-free **duplicate-letter feature** (`--letter-count`, clears `patty/sushi`), and
+   **raw-GRPO** (`rl_raw.py`, closes `rajah/witch`) → **100% raw / 0 losses / 0.5M params**
+   (`policy_xattn.pt`), proven token-only, verified on CPU. A naive DAgger round *regressed* it
+   (val-acc rose, play fell) — fixed by selecting on win rate (`train --select-play`). Research
+   variant, not the default. `evaluate_model` chunks the per-word-attention forward; margins are
+   MPS-noisy so verify on CPU.
 
 The model is essentially a learned ranker over the candidate set; the solver does the exact
 constraint propagation, and the net has learned to *probe* — under the rail (`policy_rl.pt`) or,
@@ -173,11 +175,12 @@ with C/R features, on its own (`policy_raw.pt`). See memory notes
 | `feedback.py` | Green/yellow/gray with correct duplicate handling; scalar + vectorized. |
 | `solver.py` | Pattern matrix, vectorized entropy selection, candidate filtering, game env, teacher. |
 | `encoding.py` | `encode_state` + `candidate_features` (156-d; +C/R → 170-d `CAND_DIM_AUG`). |
-| `model.py` | `WordlePolicy` (`use_history`/`factored_head`/`xattn` flags) + `CrossAttnWordHead` + save/load. |
+| `model.py` | `WordlePolicy` (`use_history`/`factored_head`/`xattn`/`letter_count`) + `CrossAttnWordHead` + save/load. |
 | `dataset.py` | Self-play → blended soft-target examples; `--state-aug` for 170-d features. |
-| `train.py` | Soft-cross-entropy (BC) loop; `--init` warm-start; infers `cand_dim` from data. |
+| `train.py` | Soft-CE (BC) loop; `--init` warm-start; `--xattn`/`--letter-count`; `--select-play` (rank on win rate). |
 | `rl.py` | **RL post-training:** GRPO + teacher demos + BC anchor → `policy_rl.pt` (hybrid 100%). |
 | `dagger.py` | **DAgger:** imitate the hybrid expert with C/R features → `policy_raw.pt` (raw 100%). |
+| `rl_raw.py` | **Raw-GRPO** polish for the history-only (`--xattn`) net → solver-free 100%. |
 | `evaluate.py` | Batched full-vocab play; `probe_when_stuck` gives the hybrid; default `policy_raw.pt`. |
 | `policy.py` | Checkpoint → `GameState → guess` wrapper; auto-aug; `probe_when_stuck` rail. |
 | `cli.py` | Interactive solver (default = raw `policy_raw.pt`; `--rl`/`--safe`/`--bc`/`--mlp`). |
