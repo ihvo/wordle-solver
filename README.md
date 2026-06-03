@@ -17,7 +17,7 @@ uv run wordle-guesser   # it suggests a word; you type the colors Wordle gave ba
 Feedback is 5 letters — `g` = green, `y` = yellow, `x` = gray (e.g. `xxgxx`):
 
 ```
-Turn 1 — suggested: RAISE
+Turn 1 — suggested: SLATE
 feedback: xxgxx
 Turn 2 — 51 candidate(s) — suggested: GLINT
 feedback: xygxx
@@ -29,15 +29,18 @@ Handy flags: `--mlp` (the smaller model), `--teacher` (pure solver, no model), `
 
 ## How well does it play?
 
-Over all 2315 answers: **99.4% solved, 3.62 guesses on average** — essentially matching
-the entropy solver (3.50 avg), and it plays just as well with *no* solver help at all.
+Over all 2315 answers: **99.7% solved, 3.55 guesses on average** — essentially matching
+the entropy solver (3.50 avg), and it plays nearly as well with *no* solver help at all.
 
-There are two interchangeable trained models, identical in play:
+| Model | Size | File | avg / losses |
+|---|---:|---|---|
+| Transformer (default) | 1.04M params | `models/policy.pt` | 3.55 / 7 |
+| MLP (`--mlp`) | 0.34M params | `models/policy_mlp.pt` | 3.57 / 11 |
 
-| Model | Size | File |
-|---|---:|---|
-| Transformer (default) | 1.04M params | `models/policy.pt` |
-| MLP (`--mlp`) | 0.34M params | `models/policy_mlp.pt` |
+Both open **SLATE** — a fixed first move forced at play time, *not* learned by the net.
+Greedy entropy prefers RAISE, but that's myopic: SLATE leads to easier endgames and a
+lower average. (The opening is one deterministic state, so it's a chosen constant, not
+something the model should memorize.)
 
 ## An honest note
 

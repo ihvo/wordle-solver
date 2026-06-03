@@ -75,6 +75,7 @@ def main() -> None:
     ap.add_argument("--ff", type=int, default=256, help="feed-forward dim")
     ap.add_argument("--no-history", action="store_true", help="drop the transformer; candidate features only")
     ap.add_argument("--factored-head", action="store_true", help="letter-factored word head")
+    ap.add_argument("--opener", default=None, help="fixed turn-1 word, forced at inference (match the dataset's --opener)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="auto")
     args = ap.parse_args()
@@ -83,6 +84,9 @@ def main() -> None:
     device = pick_device(args.device)
     vocab = load_vocabulary()
     print(f"device: {device}")
+    opener = args.opener.lower() if args.opener else None
+    if opener and opener not in vocab.index:
+        raise SystemExit(f"opener {opener!r} is not in the answer vocabulary")
 
     tokens, mask, feats, tgt_idx, tgt_w = load_dataset(args.data)
     n = tokens.size(0)
@@ -105,6 +109,7 @@ def main() -> None:
         dim_feedforward=args.ff,
         use_history=not args.no_history,
         factored_head=args.factored_head,
+        opener=opener,
     )
     model = WordlePolicy(config, word_letters=vocab.letters).to(device)
     n_params = sum(p.numel() for p in model.parameters())

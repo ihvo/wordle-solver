@@ -23,6 +23,10 @@ class ModelPolicy:
         self.vocab = vocab
         self.device = device
         self.mask_to_candidates = mask_to_candidates
+        # The opening is a fixed, known move — play it directly rather than asking
+        # the net to recall a single training example (which it does unreliably).
+        op = getattr(model.config, "opener", None)
+        self.opener_idx = vocab.index[op] if op else None
 
     @torch.no_grad()
     def logits(self, state: GameState) -> torch.Tensor:
@@ -42,9 +46,13 @@ class ModelPolicy:
         return out
 
     def __call__(self, state: GameState) -> int:
+        if self.opener_idx is not None and state.turn == 0:
+            return self.opener_idx
         return int(self.logits(state).argmax())
 
     def topk(self, state: GameState, k: int = 5) -> list[tuple[str, float]]:
+        if self.opener_idx is not None and state.turn == 0:
+            return [(self.vocab.words[self.opener_idx], 1.0)]
         probs = torch.softmax(self.logits(state), dim=0)
         k = min(k, int((probs > 0).sum()))
         vals, idx = torch.topk(probs, k)

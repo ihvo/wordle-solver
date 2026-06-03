@@ -65,6 +65,7 @@ def generate(
     alpha: float = 0.4,
     seed: int = 0,
     max_guesses: int = MAX_GUESSES,
+    opener: str | None = None,
 ):
     """Self-play data distilling the candidate-entropy ranking (soft targets).
 
@@ -82,12 +83,15 @@ def generate(
     idx_rows: list[np.ndarray] = []
     w_rows: list[np.ndarray] = []
 
-    def record(toks, candidates):
+    def record(toks, candidates, force_label=None):
         key = tuple(toks.tolist())
         if key in seen:
             return
         seen.add(key)
-        idx, w = _soft_target(p, candidates, temperature, alpha)
+        if force_label is not None:  # seed the opening with a chosen word, one-hot
+            idx, w = np.asarray([int(force_label)]), np.asarray([1.0], dtype=np.float32)
+        else:
+            idx, w = _soft_target(p, candidates, temperature, alpha)
         row_i = np.full(TOPK, -1, dtype=np.int64)
         row_w = np.zeros(TOPK, dtype=np.float32)
         row_i[: len(idx)] = idx
@@ -97,9 +101,12 @@ def generate(
         idx_rows.append(row_i)
         w_rows.append(row_w)
 
-    # The opening is constant across all games; record it once.
-    opening = best_guess(p, all_words, pool=all_words)
-    record(encode_state([], [], letters), all_words)
+    # The opening is constant across all games; record it once. By default it's
+    # the teacher's max-entropy pick, but that's myopic — a fixed `opener` (e.g.
+    # "slate") seeds easier continuations and a lower average. The recorded label
+    # is still the opener, so the model memorizes whichever opening we seed from.
+    opening = vocab.encode(opener) if opener else best_guess(p, all_words, pool=all_words)
+    record(encode_state([], [], letters), all_words, force_label=opening if opener else None)
 
     for _ in range(passes):
         for answer in rng.permutation(n):
@@ -137,14 +144,19 @@ def main() -> None:
     ap.add_argument("--epsilon", type=float, default=0.35)
     ap.add_argument("--temperature", type=float, default=0.3)
     ap.add_argument("--alpha", type=float, default=0.4, help="soft-tail mass; 1-alpha spikes the best candidate")
+    ap.add_argument("--opener", default=None,
+                    help="seed self-play from this opening word (default: teacher's max-entropy pick)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=Path, default=DATA_DIR / "bc_dataset.npz")
     args = ap.parse_args()
 
     vocab = load_vocabulary()
     p = load_pattern_matrix(vocab)
+    if args.opener and args.opener.lower() not in vocab.index:
+        raise SystemExit(f"opener {args.opener!r} is not in the answer vocabulary")
 
-    print(f"generating: {args.passes} passes, eps={args.epsilon}, T={args.temperature}, alpha={args.alpha} ...")
+    print(f"generating: {args.passes} passes, eps={args.epsilon}, T={args.temperature}, "
+          f"alpha={args.alpha}, opener={args.opener or 'auto'} ...")
     tokens, feats, tgt_idx, tgt_w = generate(
         vocab,
         p,
@@ -153,6 +165,7 @@ def main() -> None:
         temperature=args.temperature,
         alpha=args.alpha,
         seed=args.seed,
+        opener=args.opener.lower() if args.opener else None,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(args.out, tokens=tokens, feats=feats, tgt_idx=tgt_idx, tgt_w=tgt_w)

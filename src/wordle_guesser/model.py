@@ -34,6 +34,7 @@ class PolicyConfig:
     cand_dim: int = CAND_DIM
     use_history: bool = True
     factored_head: bool = False
+    opener: str | None = None  # fixed turn-1 word; the net can't learn a 1-example opening
 
 
 class WordlePolicy(nn.Module):

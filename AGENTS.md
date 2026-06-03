@@ -12,12 +12,16 @@ exact constraint engine the model rides on.
 ## Status (2026-06-02)
 
 - **Done:** vectorized feedback engine; entropy teacher (100% win, 3.50 avg over all
-  2315 answers); transformer policy distilled from it (99.4% win, **3.62 avg**, at the
-  masked-play ceiling); candidate-only **MLP** alternative (0.34M params, identical
-  play); interactive CLI; 23 passing tests. Pushed to `github.com/ihvo/wordle-solver`
-  (private). Checkpoints are committed under `models/`.
-- **Not done (see Next steps):** non-candidate *probing* to close 3.62 → 3.50; using the
-  full ~10.6k allowed-guess list as the action space.
+  2315 answers); transformer policy distilled from it (**99.7% win, 3.55 avg, 7 losses**);
+  candidate-only **MLP** alternative (0.34M params, **3.57 avg**); both seeded from and
+  forced to open **SLATE** (see Conventions); interactive CLI; 23 passing tests. Pushed to
+  `github.com/ihvo/wordle-solver` (private). Checkpoints are committed under `models/`.
+- **Tried and rejected:** non-candidate *probing* distillation (full-pool labels) — a
+  small net **can't learn to pick probes**; both the 0.34M and 1.04M nets got *worse*
+  (masked ~4.0, unmasked 30–59% win). The 3.50→3.42 gap needs lookahead/search, not a
+  relabel. The opener change (RAISE→SLATE) banked ~0.06 instead.
+- **Not done (see Next steps):** the full ~10.6k allowed-guess action space; shrinking
+  the head (factored / width sweep) at iso-quality.
 
 ## Setup
 
@@ -29,9 +33,12 @@ Device auto-selects MPS → CUDA → CPU. Python 3.14 has no torch wheels — st
 ## Workflows
 
 ### Rebuild a model from scratch
-1. `uv run python -m wordle_guesser.dataset` → self-play data to `data/bc_dataset.npz`
-2. `uv run python -m wordle_guesser.train` → transformer to `models/policy.pt`
+The shipped checkpoints open **SLATE** — pass the *same* `--opener` to both steps (the
+dataset seeds from it, the model bakes it into `config.opener` and forces it at turn 1).
+1. `uv run python -m wordle_guesser.dataset --opener slate` → self-play to `data/bc_dataset.npz`
+2. `uv run python -m wordle_guesser.train --opener slate --epochs 24` → transformer to `models/policy.pt`
    - MLP variant: add `--no-history --out models/policy_mlp.pt`
+   - the opener needs ~24 epochs to land cleanly; 12 undertrains the post-SLATE states
 3. `uv run python -m wordle_guesser.evaluate [--model PATH]` → win-rate / avg-guesses vs teacher
 4. `uv run pytest` before committing
 
@@ -66,6 +73,12 @@ Device auto-selects MPS → CUDA → CPU. Python 3.14 has no torch wheels — st
 - **Don't make the model reconstruct state from history.** The sufficient statistic is
   the *candidate set*. **Do** pass `encoding.candidate_features` (156-d). A history-only
   model sits at the random baseline.
+- **Don't let the net learn the opening.** Turn 1 is one deterministic state; trained on a
+  single example it's learned unreliably (the SLATE net, left to itself, opens "crypt" and
+  collapses to 3.88). **Do** set `config.opener` — `ModelPolicy`/`evaluate.py` force it at
+  turn 1 and bypass the net. Greedy max-entropy (RAISE) is *myopic*: it wins turn-1 info
+  but loses overall. SLATE/TRACE/LEAST/CRATE (~3.52 by expected guesses) beat RAISE (3.58);
+  RAISE has the *highest* opening entropy and one of the *worst* averages.
 - **Don't judge a model by val top-1 accuracy.** It diverges from game performance (an
   0.07M variant had the *highest* val acc and the *worst* play). **Do** rank models with
   `evaluate.py`, which plays all 2315 games.

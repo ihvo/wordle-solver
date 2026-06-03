@@ -36,6 +36,8 @@ def evaluate_model(
     """Play all answers in lockstep; return per-game guess count (0 = loss)."""
     n = len(vocab)
     letters = vocab.letters
+    opener = getattr(model.config, "opener", None)
+    opener_idx = vocab.index[opener] if opener else None
     guesses = [[] for _ in range(n)]
     codes = [[] for _ in range(n)]
     candidates = [np.arange(n) for _ in range(n)]
@@ -61,7 +63,9 @@ def evaluate_model(
         still_active = []
         for row, i in enumerate(active):
             lg = logits[row]
-            if mask_to_candidates:
+            if opener_idx is not None and turn == 0:
+                guess = opener_idx
+            elif mask_to_candidates:
                 cand = candidates[i]
                 guess = int(cand[np.argmax(lg[cand])])
             else:
