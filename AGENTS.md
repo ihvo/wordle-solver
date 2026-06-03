@@ -12,16 +12,22 @@ exact constraint engine the model rides on.
 ## Status (2026-06-02)
 
 - **Done:** vectorized feedback engine; entropy teacher (100% win, 3.50 avg over all
-  2315 answers); transformer policy distilled from it (**99.7% win, 3.55 avg, 7 losses**);
-  candidate-only **MLP** alternative (0.34M params, **3.57 avg**); both seeded from and
-  forced to open **SLATE** (see Conventions); interactive CLI; 23 passing tests. Pushed to
-  `github.com/ihvo/wordle-solver` (private). Checkpoints are committed under `models/`.
-- **Tried and rejected:** non-candidate *probing* distillation (full-pool labels) — a
-  small net **can't learn to pick probes**; both the 0.34M and 1.04M nets got *worse*
-  (masked ~4.0, unmasked 30–59% win). The 3.50→3.42 gap needs lookahead/search, not a
-  relabel. The opener change (RAISE→SLATE) banked ~0.06 instead.
-- **Not done (see Next steps):** the full ~10.6k allowed-guess action space; shrinking
-  the head (factored / width sweep) at iso-quality.
+  2315 answers); transformer policy behavior-cloned from it (99.7% win, 3.55 avg masked);
+  candidate-only **MLP** alternative (0.34M params); all seeded from and forced to open
+  **SLATE** (see Conventions); interactive CLI; **27 passing tests**. Checkpoints committed
+  under `models/`.
+- **RL post-training → 100% (the headline).** `rl.py` post-trains the BC transformer with
+  GRPO + teacher-demo exploration to learn *probing*. Played **hybrid** (mask while
+  candidates fit the budget, probe when stuck — see Conventions) the RL checkpoint
+  `models/policy_rl.pt` is **100% win, 3.481 avg, 0 losses** over all 2315 — matching the
+  full-pool teacher's win rate. This is the new CLI/evaluate default. Raw (unmasked) play
+  stays healthy at 99.3% thanks to a BC anchor; masked-only is 99.6%.
+- **The earlier "probing can't be distilled" result still holds — and is *why* RL works.**
+  Behavior cloning of full-pool probe labels failed (the net can't *rank* a probe whose
+  value is a multi-step setup). RL succeeds because it optimises the terminal win directly:
+  a probe's payoff is a return, not a per-state label. See Findings log.
+- **Not done (see Next steps):** push hybrid avg 3.481 → teacher's 3.45; the full ~10.6k
+  allowed-guess action space; shrink the head at iso-quality.
 
 ## Setup
 
@@ -36,15 +42,19 @@ Device auto-selects MPS → CUDA → CPU. Python 3.14 has no torch wheels — st
 The shipped checkpoints open **SLATE** — pass the *same* `--opener` to both steps (the
 dataset seeds from it, the model bakes it into `config.opener` and forces it at turn 1).
 1. `uv run python -m wordle_guesser.dataset --opener slate` → self-play to `data/bc_dataset.npz`
-2. `uv run python -m wordle_guesser.train --opener slate --epochs 24` → transformer to `models/policy.pt`
+2. `uv run python -m wordle_guesser.train --opener slate --epochs 24` → BC transformer to `models/policy.pt`
    - MLP variant: add `--no-history --out models/policy_mlp.pt`
    - the opener needs ~24 epochs to land cleanly; 12 undertrains the post-SLATE states
-3. `uv run python -m wordle_guesser.evaluate [--model PATH]` → win-rate / avg-guesses vs teacher
-4. `uv run pytest` before committing
+3. **RL post-train → 100%:** `uv run python -m wordle_guesser.rl` warm-starts from
+   `models/policy.pt`, plays unmasked under the safety rail, and saves the best hybrid
+   checkpoint to `models/policy_rl.pt` (~700 updates, a few minutes on MPS). Selects on the
+   hybrid win-rate it deploys with; watch the printed `raw %` to confirm the anchor holds.
+4. `uv run python -m wordle_guesser.evaluate [--model PATH]` → teacher / **hybrid** / masked / raw
+5. `uv run pytest` before committing
 
 ### Play / debug a single game
-`uv run wordle-guesser [--mlp|--teacher|--no-mask|--model PATH]`. The pattern matrix
-(`data/patterns_answers.npy`) rebuilds automatically on first run (~1s).
+`uv run wordle-guesser [--bc|--mlp|--teacher|--no-mask|--model PATH]`. Default is the RL
+policy played hybrid. The pattern matrix (`data/patterns_answers.npy`) rebuilds on first run.
 
 ## Key decisions
 
@@ -52,8 +62,9 @@ dataset seeds from it, the model bakes it into `config.opener` and forces it at 
 
 | Need | Use |
 |---|---|
-| Smallest model, same quality | MLP — `--mlp` (`use_history=False`) |
-| The transformer / "sequence model" | default `models/policy.pt` |
+| Best play (100%, default) | RL + hybrid — `models/policy_rl.pt` (no flag) |
+| The behavior-cloned transformer | `--bc` (`models/policy.pt`, masked) |
+| Smallest model | MLP — `--mlp` (`use_history=False`, masked) |
 | No model, pure baseline | `--teacher` |
 | See the model's unaided picks | `--no-mask` |
 
@@ -79,6 +90,16 @@ dataset seeds from it, the model bakes it into `config.opener` and forces it at 
   turn 1 and bypass the net. Greedy max-entropy (RAISE) is *myopic*: it wins turn-1 info
   but loses overall. SLATE/TRACE/LEAST/CRATE (~3.52 by expected guesses) beat RAISE (3.58);
   RAISE has the *highest* opening entropy and one of the *worst* averages.
+- **The hybrid rail is the deploy policy — probing and masking are mutually exclusive.**
+  A probe is a *non-candidate* word, so the candidate mask forbids it. The rule
+  (`ModelPolicy(probe_when_stuck=True)`, `evaluate_model(probe_when_stuck=True)`): keep the
+  mask while `len(candidates) ≤ guesses_left` (enumerating can't lose), lift it once they
+  outnumber the budget so the net can probe. This is exact and free, and only the RL net
+  was *trained* to probe — `--bc`/`--mlp` play masked (their best mode).
+- **RL trains only the stuck decision; the BC anchor protects the rest.** All policy
+  gradient lands on stuck states; a frozen KL anchor on a sample of *normal* (non-stuck)
+  states keeps unmasked play from rotting. Drop the anchor and raw play collapses (94.6%)
+  while hybrid still looks fine — so **watch the printed `raw %`**, not just hybrid.
 - **Don't judge a model by val top-1 accuracy.** It diverges from game performance (an
   0.07M variant had the *highest* val acc and the *worst* play). **Do** rank models with
   `evaluate.py`, which plays all 2315 games.
@@ -103,9 +124,17 @@ dataset seeds from it, the model bakes it into `config.opener` and forces it at 
 3. Ablations: attention heads and encoder depth barely matter; **dropping the encoder
    entirely** (candidate-only MLP) costs nothing (1.04M → 0.34M). Halving `d_model`
    *does* hurt. The factored-letter head roughly halves params for ~+0.06 avg.
+4. **Probing is an RL problem, not a labeling one.** BC of full-pool probe labels failed
+   (masked ceiling ~99.7%; raw collapses). Post-training the *same net* with GRPO on the
+   terminal win reward — teacher trajectories seed exploration on the trap states, a BC
+   anchor pins normal play — closed it to **100%**. The decisive moves: fold the safety
+   rail into the loop so gradient hits only the stuck decision; select on the hybrid metric
+   you deploy; anchor the rest. The 99.7→100 gain *is* the ~7 neighbour-trap answers
+   (`-ound`, `-atch`, `-aunt`, `-aste`, `-ight`).
 
-The model is essentially a learned ranker over the candidate set; the solver does the
-exact constraint propagation. See the project memory note `candidate-set-is-sufficient-statistic`.
+The model is essentially a learned ranker over the candidate set; the solver does the exact
+constraint propagation, and on the stuck states the RL net has learned to *probe*. See the
+memory notes `candidate-set-is-sufficient-statistic` and `rl-probing-reaches-100`.
 
 ## Module map
 
@@ -117,15 +146,17 @@ exact constraint propagation. See the project memory note `candidate-set-is-suff
 | `encoding.py` | History tokenization (`encode_state`) + candidate features (`candidate_features`). |
 | `model.py` | `WordlePolicy` (`use_history`, `factored_head` flags) + save/load. |
 | `dataset.py` | Self-play + DAgger exploration → blended soft-target examples. |
-| `train.py` | Soft-cross-entropy training loop. |
-| `evaluate.py` | Batched full-vocab play, model vs teacher. |
-| `policy.py` | Checkpoint → `GameState → guess` inference wrapper. |
-| `cli.py` | Interactive solver. |
+| `train.py` | Soft-cross-entropy (BC) training loop. |
+| `rl.py` | **RL post-training:** GRPO + teacher demos + BC anchor → `policy_rl.pt` (probing → 100%). |
+| `evaluate.py` | Batched full-vocab play; `probe_when_stuck` gives the hybrid policy. |
+| `policy.py` | Checkpoint → `GameState → guess` wrapper; `probe_when_stuck` for the hybrid rail. |
+| `cli.py` | Interactive solver (default = RL + hybrid). |
 
 ## Next steps
 
-- **Probing toward 3.50:** let the action space include non-candidate words to extract
-  information. Drops the candidate mask; this was the original failure mode, so expect to
-  need explicit validity learning. Bump output vocab to the allowed-guess list.
+- **Hybrid avg 3.481 → 3.45:** the win rate is maxed; trim guesses. Reward already favours
+  speed — try a longer/lower-LR RL tail, or shape lightly once 100% is locked.
+- **Full allowed-guess action space (~10.6k):** richer probes than the answer list allows;
+  needs a new output head (breaks current checkpoints) and more exploration.
 - **Shrink further:** the candidate-only MLP's params are ~90% output head — a factored
   head gets toward ~0.1M, but stacking cuts past that broke play; measure each step.

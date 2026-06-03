@@ -31,9 +31,16 @@ def summarize(solved_turn: np.ndarray) -> dict:
 
 @torch.no_grad()
 def evaluate_model(
-    model, vocab, p, device, mask_to_candidates=True, max_guesses=MAX_GUESSES
+    model, vocab, p, device, mask_to_candidates=True, probe_when_stuck=False,
+    max_guesses=MAX_GUESSES,
 ) -> np.ndarray:
-    """Play all answers in lockstep; return per-game guess count (0 = loss)."""
+    """Play all answers in lockstep; return per-game guess count (0 = loss).
+
+    ``probe_when_stuck`` plays the *hybrid* (deploy) policy: keep the candidate
+    mask while the survivors fit the remaining budget, but lift it once they
+    outnumber it so the model can probe with a non-candidate. This is how the RL
+    checkpoint reaches 100%.
+    """
     n = len(vocab)
     letters = vocab.letters
     opener = getattr(model.config, "opener", None)
@@ -60,15 +67,16 @@ def evaluate_model(
             .cpu()
             .numpy()
         )
+        remaining = max_guesses - turn  # guesses left including this one
         still_active = []
         for row, i in enumerate(active):
             lg = logits[row]
+            cand = candidates[i]
             if opener_idx is not None and turn == 0:
                 guess = opener_idx
-            elif mask_to_candidates:
-                cand = candidates[i]
+            elif mask_to_candidates and not (probe_when_stuck and len(cand) > remaining):
                 guess = int(cand[np.argmax(lg[cand])])
-            else:
+            else:  # raw, or stuck under the hybrid rail -> probe over all words
                 guess = int(np.argmax(lg))
             code = int(p[guess, i])  # answer for game i is word i
             guesses[i].append(guess)
@@ -101,7 +109,7 @@ def _print_row(label: str, m: dict) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Evaluate the Wordle policy vs the teacher.")
-    ap.add_argument("--model", type=Path, default=MODELS_DIR / "policy.pt")
+    ap.add_argument("--model", type=Path, default=MODELS_DIR / "policy_rl.pt")
     ap.add_argument("--device", default="auto")
     args = ap.parse_args()
 
@@ -114,8 +122,9 @@ def main() -> None:
     if ckpt_words != vocab.words:
         raise SystemExit("checkpoint vocabulary does not match data/answers.txt")
 
-    print(f"device: {device}\n")
+    print(f"device: {device}   model: {args.model.name}\n")
     _print_row("teacher (entropy)", summarize(evaluate_teacher(vocab, p)))
+    _print_row("model (hybrid)", summarize(evaluate_model(model, vocab, p, device, True, probe_when_stuck=True)))
     _print_row("model (masked)", summarize(evaluate_model(model, vocab, p, device, True)))
     _print_row("model (raw, unmasked)", summarize(evaluate_model(model, vocab, p, device, False)))
 
