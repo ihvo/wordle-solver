@@ -61,4 +61,6 @@ candidate tracking (the rail); the net's own unaided raw play is ~99.3%.
 ## More
 
 Play / train / test commands, the design story, and how to extend it live in
-**[AGENTS.md](AGENTS.md)**.
+**[AGENTS.md](AGENTS.md)**. The story of how RL took the net from 99.7% to 100% —
+diagnostics, the recipe, and the dead-ends — is the research log in
+**[docs/](docs/2026-06-02-rl-post-training-to-100.md)**.
