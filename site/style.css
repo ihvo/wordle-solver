@@ -122,15 +122,18 @@ section h2 { font-size: clamp(26px, 4.4vw, 40px); margin: 0 0 .35em; }
 .note { color: var(--muted); font-size: 14px; }
 
 /* ---------- interactive controls ---------- */
-.controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 6px 0 4px; }
+/* fields are label-over-input columns (taller than buttons), so bottom-align the
+   row and give inputs + buttons one shared height so they sit on the same line. */
+.controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin: 6px 0 4px; }
 label.fld { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 5px; }
 input[type=text] {
   font: 700 18px/1 var(--mono); text-transform: uppercase; letter-spacing: .14em;
-  width: 150px; padding: 9px 12px; border: 2px solid var(--light); border-radius: 8px; color: var(--ink);
+  width: 150px; height: 44px; padding: 0 12px; border: 2px solid var(--light); border-radius: 8px; color: var(--ink);
 }
 input[type=text]:focus { outline: none; border-color: var(--green); }
 .btn {
-  font: 700 14px/1 var(--font); padding: 11px 18px; border-radius: 8px; cursor: pointer;
+  font: 700 14px/1 var(--font); height: 44px; padding: 0 18px; border-radius: 8px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
   background: var(--green); color: #fff; border: 0; transition: background .15s, transform .05s;
 }
 .btn:hover { background: var(--green-d); }
