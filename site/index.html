@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wordle-Guesser — a small policy from 99.4% to 100%</title>
-<meta name="description" content="How a 1M-parameter network learned to play Wordle perfectly — an entropy solver, behavior cloning, and reinforcement learning that taught it to probe. Interactive, with a playable agent.">
+<meta name="description" content="How a 1M-parameter network learned to play Wordle perfectly — an entropy solver, behavior cloning, reinforcement learning that taught it to probe, and DAgger that folded the endgame rule into the weights for raw 100% play. Interactive, with a playable agent.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -33,7 +33,8 @@
     <h1>A small policy that plays<br>Wordle <span class="headline-num">perfectly</span>.</h1>
     <p class="sub">Behavior cloning got a 1.04M-parameter network to 99.4%. Reinforcement learning
       then taught it the one move imitation couldn't — <b>probing</b> — and closed the gap to a
-      <b>perfect 100%</b> across all 2,315 answers. Here's the pipeline, stage by stage.</p>
+      <b>perfect 100%</b> across all 2,315 answers. A last round of imitation then folded the endgame
+      rule into the weights, so it plays <b>raw</b> — no hand-coded rail. Here's the pipeline, stage by stage.</p>
     <div class="scrollcue">scroll to begin</div>
   </div>
 </header>
@@ -279,13 +280,13 @@
       <tbody>
         <tr><td>Cloned (Stage 2)</td><td class="num">99.4%</td><td class="num">3.62</td><td class="num">~14</td></tr>
         <tr><td>+ fixed opener (Stage 4)</td><td class="num">99.7%</td><td class="num">3.55</td><td class="num">7</td></tr>
-        <tr class="win"><td>+ RL probing (Stage 5) <span class="badge">final</span></td><td class="num">100.0%</td><td class="num">3.48</td><td class="num">0</td></tr>
+        <tr class="win"><td>+ RL probing (Stage 5) <span class="badge">hybrid</span></td><td class="num">100.0%</td><td class="num">3.48</td><td class="num">0</td></tr>
         <tr><td>Entropy teacher (target)</td><td class="num">100.0%</td><td class="num">3.50</td><td class="num">0</td></tr>
       </tbody>
     </table>
-    <p class="note" style="margin-top:14px">The final policy matches the teacher's win rate — and edges its
+    <p class="note" style="margin-top:14px">This policy matches the teacher's win rate — and edges its
       average — with ~1M parameters and the hybrid rail. The probing is the network's own; the only solver
-      dependency it keeps is candidate tracking.</p>
+      dependency it keeps is candidate tracking. Stage 6 removes the rail too.</p>
 
     <div class="card">
       <h3 style="margin-top:0">The whole pipeline, on one chart</h3>
@@ -442,11 +443,11 @@
       <div class="eli5" id="gExplain" style="margin-bottom:0">Press <b>step</b> to start. Each move is
         annotated — narrowing (best candidate) or a probe (non-candidate, played to split a tied set).</div>
     </div>
-    <p class="note" style="margin-top:14px">This runs the <b>hybrid-rail strategy the RL policy converged to</b>
+    <p class="note" style="margin-top:14px">This plays the <b>same endgame strategy the shipped policy learned</b>
       — best candidate while survivors fit the budget, otherwise the max-entropy probe over the full pool. The
-      trained policy is a 1.04M-parameter PyTorch model; this JS twin computes the identical decision (greedy
-      entropy), so it runs instantly with no weights to download. Verified: <b>100% / 0 losses</b> over all
-      2,315, in-browser.</p>
+      shipped net (<code>policy_raw.pt</code>) does this <b>raw</b>, with no inference-time rail; this JS twin
+      computes the identical decision (greedy entropy), so it runs instantly with no weights to download.
+      Verified: <b>100% / 0 losses</b> over all 2,315, in-browser.</p>
   </div>
 </section>
 
@@ -454,13 +455,14 @@
 <footer>
   <div class="wrap reveal">
     <h3>The full research log</h3>
-    <p class="note" style="margin-top:0">This walkthrough condenses a three-part lab notebook with the real
+    <p class="note" style="margin-top:0">This walkthrough condenses a four-part lab notebook with the real
       numbers, code, and dead-ends.</p>
     <div class="linklist">
       <a href="https://github.com/ihvo/wordle-solver">› Code on GitHub (ihvo/wordle-solver)</a>
-      <a href="../docs/2026-06-01-entropy-teacher-and-cloned-policies.md">› Part 1 — entropy teacher &amp; cloned policies</a>
-      <a href="../docs/2026-06-02-probing-and-openers.md">› Part 2 — probing &amp; openers</a>
-      <a href="../docs/2026-06-02-rl-post-training-to-100.md">› Part 3 — reinforcement learning to 100%</a>
+      <a href="https://github.com/ihvo/wordle-solver/blob/main/docs/2026-06-01-entropy-teacher-and-cloned-policies.md">› Part 1 — entropy teacher &amp; cloned policies</a>
+      <a href="https://github.com/ihvo/wordle-solver/blob/main/docs/2026-06-02-probing-and-openers.md">› Part 2 — probing &amp; openers</a>
+      <a href="https://github.com/ihvo/wordle-solver/blob/main/docs/2026-06-02-rl-post-training-to-100.md">› Part 3 — reinforcement learning to 100%</a>
+      <a href="https://github.com/ihvo/wordle-solver/blob/main/docs/2026-06-03-deprecating-the-rail.md">› Part 4 — folding the rail into the net</a>
     </div>
     <p class="foot-note">The candidate counts and letter marginals above are computed live from the real 2,315-word
       answer list embedded in the page. No tracking, no build step — one folder of HTML/CSS/JS.</p>
