@@ -131,9 +131,9 @@ const $ = id => document.getElementById(id);
       const c = document.createElement("span"); c.className = "chip"; c.textContent = w; chips.appendChild(c);
     });
     if (cands.length > 12) { const m = document.createElement("span"); m.className = "chip"; m.textContent = "+" + (cands.length - 12) + " more"; chips.appendChild(m); }
-    hint.textContent = cands.length === 0 ? "No words fit — those colors can't happen together. Try reset."
-      : cands.length === 1 ? "Down to one — that must be the answer!"
-      : "A strong guess would split these into the smallest leftover groups.";
+    hint.textContent = cands.length === 0 ? "No consistent words — that feedback combination is unreachable. Reset to start over."
+      : cands.length === 1 ? "One candidate left — that's the answer."
+      : "A high-information guess splits these into the smallest expected groups.";
   }
   function apply() {
     const gw = ($("candGuess").value || "").toLowerCase();
@@ -154,8 +154,8 @@ const $ = id => document.getElementById(id);
   const a = $("inHistory"), b = $("inCands"), box = $("ssExplain");
   if (!box) return;
   const texts = {
-    hist: "<p style='margin:0'><b>Why it failed:</b> from a raw list of past moves, the net would have to re-figure-out the whole game from scratch every turn. It learned next to nothing — about as good as random guessing (~4.1 guesses, barely better than chance).</p>",
-    cand: "<p style='margin:0'><b>Why this works:</b> the still-possible list is the <i>only</i> thing that matters for the next move. Hand the net a summary of it and the task becomes easy — pick the best word for these survivors. Win rate jumped from random to <b>99.4%</b>.</p>",
+    hist: "<p style='margin:0'><b>Why it fails:</b> from raw history the policy has to reconstruct the candidate set <i>and</i> re-derive entropy maximization end-to-end, from one argmax label per state. It doesn't — it stays at the random-consistent baseline (~4.1 avg).</p>",
+    cand: "<p style='margin:0'><b>Why it works:</b> the candidate set is the sufficient statistic, so the policy only has to rank guesses given its summary — a tractable readout. Win rate goes from random to <b>99.4%</b>.</p>",
   };
   function set(which) {
     a.classList.toggle("on", which === "hist"); b.classList.toggle("on", which === "cand");
@@ -184,7 +184,7 @@ const $ = id => document.getElementById(id);
     return cols;
   }
   function draw(cands) {
-    countEl.textContent = cands.length + " words still possible — here's where their letters tend to sit:";
+    countEl.textContent = cands.length + " candidates — per-position letter marginals over the survivors:";
     const cols = compute(cands);
     grid.innerHTML = "";
     cols.forEach((ranked, i) => {
@@ -231,7 +231,7 @@ const $ = id => document.getElementById(id);
       const row = document.createElement("div"); row.style.marginBottom = "6px";
       renderTiles(row, w, feedback(w, answer)); board.appendChild(row);
     });
-    msg.innerHTML = `You have <b>${guessesLeft} guesses</b> but <b>${family.length} look-alikes</b>. Trying them one at a time, each miss only crosses off itself — you can run out before you hit <b>${answer.toUpperCase()}</b>. <span style="color:#b23">This is how games are lost.</span>`;
+    msg.innerHTML = `<b>${guessesLeft} guesses</b>, <b>${family.length} look-alikes</b>. Enumerating one at a time, each miss only rules itself out — you can exhaust the budget before reaching <b>${answer.toUpperCase()}</b>. <span style="color:#b23">This is the masked-play ceiling (~99.7%).</span>`;
   }
   function showProbe() {
     board.innerHTML = "";
@@ -247,7 +247,7 @@ const $ = id => document.getElementById(id);
     const after = filterCandidates(family, best, feedback(best, answer));
     const row2 = document.createElement("div");
     renderTiles(row2, answer, feedback(answer, answer), { flip: true }); board.appendChild(row2);
-    msg.innerHTML = `One probe — <b>${best.toUpperCase()}</b> — isn't even a candidate, but its colors tell the look-alikes apart. After it, only <b>${after.length === 1 ? after[0].toUpperCase() : after.length + " words"}</b> remain, so the next guess wins. <span style="color:var(--green-d)">That's the trick the net had to learn.</span>`;
+    msg.innerHTML = `One probe — <b>${best.toUpperCase()}</b> — isn't a candidate, but its feedback partitions the cluster. After it, only <b>${after.length === 1 ? after[0].toUpperCase() : after.length + " candidates"}</b> remain, so the next guess wins. <span style="color:var(--green-d)">This is the move masked cloning can't make.</span>`;
   }
   const b1 = $("trapGuessOne"), b2 = $("trapProbe");
   b1.addEventListener("click", () => { b1.classList.add("on"); b2.classList.remove("on"); showOneByOne(); });
@@ -353,14 +353,14 @@ lineChart($("rlChart"),
     clearInterval(timer); timer = null;
     answer = (newAnswer || ansIn.value || "pound").toLowerCase();
     if (!/^[a-z]{5}$/.test(answer) || !ANSWERS.includes(answer)) {
-      status.textContent = `"${answer}" isn't in the answer list — pick another 5-letter word.`;
+      status.textContent = `"${answer}" isn't in the 2,315-word answer set — pick another.`;
       answer = "pound";
     }
     ansIn.value = answer;
     rows = []; cands = ANSWERS.slice(); done = false;
     board.innerHTML = "";
     status.textContent = "";
-    explain.innerHTML = "Press <b>next guess</b> to start. I'll narrate each move.";
+    explain.innerHTML = "Press <b>step</b> to start. Each move is annotated — narrowing (best candidate) or a probe (non-candidate, played to split a tied set).";
   }
 
   function step() {
@@ -391,22 +391,22 @@ lineChart($("rlChart"),
     const remaining = MAX_GUESSES - rows.length;
     if (guess === answer) {
       done = true; clearInterval(timer); timer = null;
-      status.innerHTML = `<b style="color:var(--green-d)">Solved ${answer.toUpperCase()} in ${rows.length}!</b>`;
-      explain.innerHTML = `🎉 Done. That's exactly how the agent plays every one of the 2,315 answers — and it never loses.`;
+      status.innerHTML = `<b style="color:var(--green-d)">Solved ${answer.toUpperCase()} in ${rows.length}.</b>`;
+      explain.innerHTML = `Solved. The policy clears all 2,315 answers this way — 100% win, 0 losses.`;
       return;
     }
     if (rows.length >= MAX_GUESSES) {
       done = true; clearInterval(timer); timer = null;
-      status.innerHTML = `Out of guesses (this shouldn't happen for the finished agent — only earlier versions lost games).`;
+      status.innerHTML = `Out of guesses — this only happened to earlier (pre-RL) policies, not the final one.`;
       return;
     }
-    status.innerHTML = `Turn ${rows.length}: played <b>${guess.toUpperCase()}</b> → <b>${cands.length}</b> word${cands.length === 1 ? "" : "s"} left.`;
+    status.innerHTML = `Turn ${rows.length}: <b>${guess.toUpperCase()}</b> → <b>${cands.length}</b> candidate${cands.length === 1 ? "" : "s"}.`;
     if (turn === 1) {
-      explain.innerHTML = `Opened with the fixed best opener <b>SLATE</b>. ${cands.length} answers still fit.`;
+      explain.innerHTML = `Opener <b>SLATE</b> (forced, turn 1). ${cands.length} candidates remain.`;
     } else if (move.probe) {
-      explain.innerHTML = `<b style="color:var(--green-d)">Stuck → probing.</b> ${cands.length + 0} look-alikes wouldn't fit the ${remaining + 1} remaining guesses, so it played <b>${guess.toUpperCase()}</b> — not even a candidate — purely to split them. Now ${cands.length} remain.`;
+      explain.innerHTML = `<b style="color:var(--green-d)">Stuck → probe.</b> Candidates exceeded the ${remaining + 1} remaining guesses, so it played non-candidate <b>${guess.toUpperCase()}</b> to split the set (max entropy over the full pool). ${cands.length} candidate${cands.length === 1 ? "" : "s"} left.`;
     } else {
-      explain.innerHTML = `Survivors still fit the budget, so it just plays the best of them: <b>${guess.toUpperCase()}</b>. ${cands.length} left.`;
+      explain.innerHTML = `Survivors fit the budget → masked move: best candidate <b>${guess.toUpperCase()}</b>. ${cands.length} left.`;
     }
   }
 

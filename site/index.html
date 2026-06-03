@@ -3,9 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Wordle-Guesser — how a tiny AI learned to play perfectly</title>
-<meta name="description" content="An illustrated, beginner-friendly walkthrough of how we built a small neural net that plays Wordle — from an entropy solver to behavior cloning to reinforcement learning that reaches 100%.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
+<title>Wordle-Guesser — a small policy from 99.4% to 100%</title>
+<meta name="description" content="How a 1M-parameter network learned to play Wordle perfectly — an entropy solver, behavior cloning, and reinforcement learning that taught it to probe. Interactive, with a playable agent.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -27,12 +26,12 @@
 <!-- ===================== HERO ===================== -->
 <header class="hero">
   <div class="wrap">
-    <div class="stage-tag">a build story, explained simply</div>
+    <div class="stage-tag">a build log, stage by stage</div>
     <div class="hero-board" id="heroBoard" aria-hidden="true"></div>
-    <h1>We taught a tiny AI to play<br>Wordle <span class="headline-num">perfectly</span>.</h1>
-    <p class="sub">It started by copying an expert and won 99.4% of games. Then it learned a clever
-      trick on its own and now wins <b>100%</b> — every one of the 2,315 possible answers.
-      Here's the whole journey, one stage at a time.</p>
+    <h1>A small policy that plays<br>Wordle <span class="headline-num">perfectly</span>.</h1>
+    <p class="sub">Behavior cloning got a 1.04M-parameter network to 99.4%. Reinforcement learning
+      then taught it the one move imitation couldn't — <b>probing</b> — and closed the gap to a
+      <b>perfect 100%</b> across all 2,315 answers. Here's the pipeline, stage by stage.</p>
     <div class="scrollcue">scroll to begin</div>
   </div>
 </header>
@@ -41,28 +40,28 @@
 <!-- ===================== STAGE 0 — THE GAME ===================== -->
 <section id="wordle">
   <div class="wrap reveal">
-    <div class="stage-tag">Stage 0 · The game</div>
-    <h2>First, how Wordle works</h2>
-    <p class="lede">You guess a secret 5-letter word. After each guess the game paints every letter
-      a color. That's all the information you get — so good play is really about <i>reading the
-      colors</i>.</p>
+    <div class="stage-tag">Stage 0 · The environment</div>
+    <h2>The game, as an environment</h2>
+    <p class="lede">Guess a hidden 5-letter word; each guess returns a per-letter color signal. That
+      signal is the entire observation — so the task is sequential decision-making under partial
+      information, and good play is about extracting the most from each response.</p>
 
     <div class="card">
-      <p style="margin-top:0"><b>Try it.</b> Type any 5-letter guess and a secret answer, and see how
-        Wordle would color your guess:</p>
+      <p style="margin-top:0"><b>The feedback function.</b> Type a guess and a hidden answer to see the
+        coloring Wordle returns:</p>
       <div class="controls">
-        <label class="fld">your guess <input type="text" id="fbGuess" maxlength="5" value="crane"></label>
-        <label class="fld">secret answer <input type="text" id="fbAnswer" maxlength="5" value="trace"></label>
-        <button class="btn" id="fbGo">color it</button>
+        <label class="fld">guess <input type="text" id="fbGuess" maxlength="5" value="crane"></label>
+        <label class="fld">answer <input type="text" id="fbAnswer" maxlength="5" value="trace"></label>
+        <button class="btn" id="fbGo">evaluate</button>
       </div>
       <div class="tiles" id="fbTiles" style="margin-top:16px"></div>
       <div class="eli5" style="margin-bottom:0">
-        <b>Green</b> = right letter, right spot. <b>Yellow</b> = right letter, wrong spot.
-        <b>Gray</b> = the letter isn't in the word (or you've already found all of its copies).
+        <b>Green</b> = correct letter and position. <b>Yellow</b> = present, wrong position. <b>Gray</b> =
+        absent (with correct multiplicity — a repeated letter only earns as many marks as the answer holds).
       </div>
     </div>
-    <p class="note" style="margin-top:14px">Everything below is built on this one rule. A computer can
-      do this coloring for every possible word in a flash — which is exactly what makes the next part possible.</p>
+    <p class="note" style="margin-top:14px">This function is cheap to evaluate for every word pair, so we
+      precompute the full 2315×2315 <b>pattern matrix</b> once. Every stage below is built on it.</p>
   </div>
 </section>
 <div class="divider"></div>
@@ -71,41 +70,40 @@
 <section id="teacher">
   <div class="wrap reveal">
     <div class="stage-tag">Stage 1 · The teacher</div>
-    <h2>A math expert that never loses</h2>
-    <p class="lede">Before any AI, we built a classic, rock-solid Wordle player using pure math. Think of
-      it as a patient expert who, every turn, asks one question: <i>"which guess will cross out the most
-      words?"</i></p>
+    <h2>An entropy solver as the baseline</h2>
+    <p class="lede">Before any learning, the baseline is a classic information-theoretic solver. Each turn
+      it scores every guess by the <i>expected information gain</i> over the remaining answers and plays the
+      maximizer — the guess whose feedback splits the possibilities most evenly.</p>
 
     <div class="eli5">
-      <b>The key idea — the "still-possible" list.</b> At any moment, only some words are still consistent
-      with the colors you've seen. Call that the <b>candidate list</b>. A great guess is one whose colors
-      will chop that list down the fastest. (Mathematicians call the size of the cut "information" — but you
-      can just picture the list shrinking.)
+      <b>The candidate set.</b> At any point, only some answers are still consistent with the feedback so far
+      — call that set the <b>candidates</b>. A guess's value is the Shannon entropy of the feedback partition
+      it induces over the candidates: more, smaller groups = more bits = a faster-shrinking set.
     </div>
 
     <div class="card">
-      <p style="margin-top:0"><b>Watch the list shrink.</b> Start from all 2,315 answers. Enter a guess and
-        the colors you got, and we'll keep only the words that still fit:</p>
+      <p style="margin-top:0"><b>Filter the candidate set.</b> Start from all 2,315 answers; enter a guess and
+        the feedback you observed, and we keep only the consistent words:</p>
       <div class="controls">
         <label class="fld">guess <input type="text" id="candGuess" maxlength="5" value="slate"></label>
-        <label class="fld">colors (g/y/x) <input type="text" id="candColors" maxlength="5" value="xxxxx"></label>
+        <label class="fld">feedback (g/y/x) <input type="text" id="candColors" maxlength="5" value="xxxxx"></label>
         <button class="btn" id="candGo">apply</button>
         <button class="btn ghost" id="candReset">reset</button>
       </div>
       <div class="tiles" id="candTiles" style="margin:16px 0"></div>
-      <div class="bigcount"><span id="candCount">2315</span> <small>words still possible</small></div>
+      <div class="bigcount"><span id="candCount">2315</span> <small>candidates remain</small></div>
       <div class="chips" id="candChips"></div>
       <p class="note" id="candHint" style="margin-bottom:0"></p>
     </div>
 
     <div class="statrow">
-      <div class="stat"><div class="v good">100%</div><div class="k">games won by the expert</div></div>
-      <div class="stat"><div class="v">3.50</div><div class="k">average guesses to win</div></div>
-      <div class="stat"><div class="v">2,315</div><div class="k">answers it solves</div></div>
+      <div class="stat"><div class="v good">100%</div><div class="k">win rate</div></div>
+      <div class="stat"><div class="v">3.50</div><div class="k">avg guesses</div></div>
+      <div class="stat"><div class="v">2,315</div><div class="k">answers, all solved</div></div>
     </div>
-    <p class="note" style="margin-top:14px">This expert is our <b>teacher</b>, our <b>scoreboard to beat</b>,
-      and the engine that tracks the candidate list. But it's just math — the project's real goal was to get a
-      small <b>neural network</b> (a brain made of numbers it learns) to play this well.</p>
+    <p class="note" style="margin-top:14px">This solver is the <b>teacher</b> to imitate, the <b>baseline</b>
+      to beat, and the exact <b>candidate-tracking engine</b> the policies ride on. It's hand-written search,
+      though — the goal was a small <b>learned policy</b> that matches it.</p>
   </div>
 </section>
 <div class="divider"></div>
@@ -113,54 +111,51 @@
 <!-- ===================== STAGE 2 — THE CLONE ===================== -->
 <section id="clone">
   <div class="wrap reveal">
-    <div class="stage-tag">Stage 2 · The clone</div>
-    <h2>Teaching a net to copy the expert</h2>
-    <p class="lede">We showed a small neural net thousands of the expert's moves and said, in effect,
-      <i>"copy this."</i> Learning by imitation like this is called <b>behavior cloning</b>. Simple idea —
-      but <i>what we showed the net</i> turned out to be everything.</p>
+    <div class="stage-tag">Stage 2 · Behavior cloning</div>
+    <h2>Cloning the solver</h2>
+    <p class="lede">First learning step: train a network to imitate the solver, supervised on
+      <code>(state → best guess)</code> pairs from teacher self-play. That's <b>behavior cloning</b>. The
+      architecture turned out to matter far less than the <i>state representation</i> we fed it.</p>
 
     <div class="card">
-      <p style="margin-top:0"><b>The mistake first.</b> We gave the net the <i>history</i> of past guesses and
-        colors and asked it to pick the next word. It learned almost nothing — it played about as well as
-        guessing at random.</p>
+      <p style="margin-top:0"><b>The representation that failed.</b> Feed the raw move history — past guesses
+        and feedback as tokens — and predict the next word. The net learned almost nothing: it sat at the
+        random-consistent baseline.</p>
       <div class="toggle-row">
-        <button class="btn ghost on" id="inHistory">❌ feed it the history</button>
-        <button class="btn ghost" id="inCands">✅ feed it the still-possible list</button>
+        <button class="btn ghost on" id="inHistory">history tokens (fails)</button>
+        <button class="btn ghost" id="inCands">candidate features (works)</button>
       </div>
-      <div id="ssExplain">
-        <p style="margin:0"><b>Why it failed:</b> from a raw list of past moves, the net would have to
-          re-figure-out the whole game from scratch every turn. Too much to ask.</p>
-      </div>
+      <div id="ssExplain"></div>
     </div>
 
     <div class="eli5">
-      <b>The fix that made it work.</b> Don't make the net reconstruct the game — hand it a tidy summary of the
-      <b>still-possible list</b>. The most useful summary is just <b>which letters are common, and where</b>.
-      Below are the most common letters in each position among the words still standing. This little picture is
-      (almost) all the net needs to pick a smart guess.
+      <b>The candidate set is the sufficient statistic.</b> Don't make the net re-derive state from the
+      history — hand it a summary of the candidates. The one we used: per-position letter frequencies (5×26)
+      plus letter-presence frequencies (26), a 156-d vector. Below are those per-position marginals over the
+      live candidate set — the features the policy actually consumes.
     </div>
 
     <div class="card">
       <div class="controls" style="margin-bottom:6px">
-        <label class="fld">narrow the list with a clue <input type="text" id="freqGuess" maxlength="5" value="slate"></label>
-        <label class="fld">colors <input type="text" id="freqColors" maxlength="5" value="xxgxx"></label>
+        <label class="fld">condition on a clue <input type="text" id="freqGuess" maxlength="5" value="slate"></label>
+        <label class="fld">feedback <input type="text" id="freqColors" maxlength="5" value="xxgxx"></label>
         <button class="btn" id="freqGo">update</button>
-        <button class="btn ghost" id="freqReset">all words</button>
+        <button class="btn ghost" id="freqReset">all answers</button>
       </div>
       <p class="note" id="freqCount" style="margin:6px 0 10px"></p>
       <div class="freqgrid" id="freqGrid"></div>
-      <p class="note" style="margin-bottom:0">Taller green bar = that letter shows up more often in that
-        position among the remaining words. The net reads these bars (as numbers) and learns which word to play.</p>
+      <p class="note" style="margin-bottom:0">Bar height = that letter's frequency in that position across the
+        surviving candidates. The policy reads these marginals and learns to rank guesses from them.</p>
     </div>
 
     <div class="statrow">
-      <div class="stat"><div class="v good">99.4%</div><div class="k">games the cloned net won</div></div>
-      <div class="stat"><div class="v">3.62</div><div class="k">average guesses</div></div>
-      <div class="stat"><div class="v">1.0M</div><div class="k">numbers (parameters) in the net</div></div>
+      <div class="stat"><div class="v good">99.4%</div><div class="k">win rate (cloned policy)</div></div>
+      <div class="stat"><div class="v">3.62</div><div class="k">avg guesses</div></div>
+      <div class="stat"><div class="v">1.04M</div><div class="k">parameters</div></div>
     </div>
-    <p class="note" style="margin-top:14px">Nearly as good as the expert — by copying, using only that
-      little summary. One more lesson hid here: judge a player by <i>games won</i>, not by how well it matches
-      the teacher on paper. The two can disagree.</p>
+    <p class="note" style="margin-top:14px">Near-teacher play from pure imitation on the candidate features.
+      A methodological caveat that bit us: rank policies by full-game performance, not validation top-1
+      accuracy — the two diverge sharply.</p>
   </div>
 </section>
 <div class="divider"></div>
@@ -168,21 +163,22 @@
 <!-- ===================== STAGE 3 — SHRINK IT ===================== -->
 <section id="smaller">
   <div class="wrap reveal">
-    <div class="stage-tag">Stage 3 · Shrink it</div>
-    <h2>The fancy part wasn't needed</h2>
-    <p class="lede">Our first net used <b>attention</b> — the same heavy machinery behind chatbots. We tried
-      ripping it out. The net played <i>exactly the same</i>. So we kept the smaller one.</p>
+    <div class="stage-tag">Stage 3 · Ablation</div>
+    <h2>The encoder didn't earn its parameters</h2>
+    <p class="lede">The first policy ran a Transformer encoder over the history. Ablate it — drop
+      self-attention entirely and keep only the candidate-feature MLP — and play is identical.</p>
 
     <div class="card">
       <div class="statrow" style="margin-top:0">
-        <div class="stat"><div class="v">1.04M</div><div class="k">big net (with attention)</div></div>
-        <div class="stat"><div class="v good">0.34M</div><div class="k">small net (no attention)</div></div>
-        <div class="stat"><div class="v">≈ same</div><div class="k">how well they play</div></div>
+        <div class="stat"><div class="v">1.04M</div><div class="k">Transformer (history encoder)</div></div>
+        <div class="stat"><div class="v good">0.34M</div><div class="k">MLP (candidate-only)</div></div>
+        <div class="stat"><div class="v">≈ equal</div><div class="k">game performance</div></div>
       </div>
       <div class="eli5" style="margin-bottom:0">
-        <b>Why?</b> Once you hand the net the still-possible-list summary, there's nothing left for the fancy
-        machinery to figure out. The net is basically a <b>ranker</b>: "given these remaining words, which is
-        the best guess?" A plain, small net does that fine. <b>Smaller is better when it's free.</b>
+        <b>Why?</b> Once the candidate features are the input, there's nothing left for attention to recover —
+        the policy is just a <b>ranker over the candidate set</b>. A 3-layer MLP covers it. About 90% of the
+        remaining parameters live in the output head over the 2,315-word vocabulary. Cheaper is better when
+        it's free.
       </div>
     </div>
   </div>
@@ -192,40 +188,41 @@
 <!-- ===================== STAGE 4 — THE TRAP ===================== -->
 <section id="probing">
   <div class="wrap reveal">
-    <div class="stage-tag">Stage 4 · The one weakness</div>
-    <h2>The trap: too many look-alikes</h2>
-    <p class="lede">Our copy-cat net had one blind spot. Near the end of some games, a cluster of words differ
-      by a single letter — and it would try them one at a time and run out of turns.</p>
+    <div class="stage-tag">Stage 4 · The structural gap</div>
+    <h2>The trap: masked play has a ceiling</h2>
+    <p class="lede">The cloned policy only ever guesses candidates. That's safe, but it caps the win rate:
+      in clusters of near-identical words, it peels them off one per turn and can exhaust the budget.</p>
 
     <div class="card">
-      <p style="margin-top:0"><b>You're stuck on a classic trap.</b> The answer is one of these, and you have
-        a limited number of guesses left:</p>
+      <p style="margin-top:0"><b>A classic trap.</b> The answer is one of these look-alikes and you have a
+        limited number of guesses left:</p>
       <div class="chips" id="trapChips"></div>
       <div class="toggle-row" style="margin-top:16px">
-        <button class="btn ghost on" id="trapGuessOne">guess them one by one</button>
-        <button class="btn ghost" id="trapProbe">play one clever "probe"</button>
+        <button class="btn ghost on" id="trapGuessOne">enumerate candidates</button>
+        <button class="btn ghost" id="trapProbe">spend one probe</button>
       </div>
       <div id="trapBoard" style="margin-top:6px"></div>
       <p class="note" id="trapMsg" style="margin-bottom:0"></p>
     </div>
 
     <div class="eli5">
-      <b>The trick is called "probing".</b> Instead of gambling on look-alikes one by one, you play a totally
-      different word — one you <i>know</i> is wrong — purely because its colors tell the different look-alikes
-      apart in a single move. The expert does this naturally. The copy-cat net never could.
+      <b>This is probing.</b> Play a <i>non-candidate</i> purely for information — its feedback partitions the
+      tied set in a single move. Greedy entropy over the full guess pool does this for free; masking the policy
+      to candidates makes it structurally impossible. That masking ceiling is ~99.7% — exactly where cloning
+      tops out.
     </div>
 
     <div class="card">
-      <p style="margin-top:0"><b>We even tried to teach probing by example — and failed.</b></p>
-      <p style="margin-bottom:0">We relabeled the training data to show the net the expert's probe moves. It
-        got <i>worse</i>, at every size we tried. The reason is subtle: a probe's whole value is a <b>setup for
-        the next move</b>. You can't capture "this is a good setup" in a single snapshot label. That failure is
-        the clue for the final stage.</p>
+      <p style="margin-top:0"><b>Probing can't be supervised in.</b></p>
+      <p style="margin-bottom:0">We relabeled the BC targets with the full-pool teacher's probes and retrained
+        at both model sizes. Every variant got <i>worse</i>. The reason is the crux of the whole project: a
+        probe's value is a <b>multi-step return</b> — a setup for a later guess — and that can't be expressed
+        as a per-state cross-entropy label. Hold that thought for Stage 5.</p>
     </div>
 
-    <p class="note" style="margin-top:14px"><b>One free win along the way:</b> the very first guess is always the
-      same situation, so we just fixed it to a strong opener (<code>SLATE</code>). That alone nudged the average
-      from 3.62 → 3.55 at no cost.</p>
+    <p class="note" style="margin-top:14px"><b>One free win first:</b> turn 1 is a single deterministic state,
+      so we fix it to a strong opener (<code>SLATE</code>), forced at inference rather than learned. That alone
+      moved the average 3.62 → 3.55 at zero parameter cost.</p>
   </div>
 </section>
 <div class="divider"></div>
@@ -234,63 +231,65 @@
 <section id="rl">
   <div class="wrap reveal">
     <div class="stage-tag">Stage 5 · Reinforcement learning → 100%</div>
-    <h2>Let it play, and reward winning</h2>
-    <p class="lede">If you can't <i>show</i> the net the trick, let it <i>discover</i> the trick. We had it play
-      huge numbers of games and gave it a reward for winning. Over time it learned to probe on its own. This is
-      <b>reinforcement learning</b> (RL).</p>
+    <h2>Optimize the objective directly</h2>
+    <p class="lede">If a probe can't be a supervised label, stop supervising and optimize the objective. Let
+      the policy self-play and reward it for the outcome — reinforcement learning. It discovers probing on its
+      own, and closes the last 0.3% to a perfect score.</p>
 
     <div class="eli5">
-      <b>Why this works where copying didn't.</b> A reward for <i>winning the whole game</i> naturally values a
-      probe — because the payoff shows up a move later. A single "copy this" label never could. The lesson in one
-      line: <b>probing is a reward problem, not a copying problem.</b>
+      <b>Why RL works where cloning didn't.</b> A terminal win reward credits a probe through the multi-step
+      return; a per-state label can't. <b>Probing is a credit-assignment problem, not a labeling one</b> —
+      precisely why supervised relabeling failed in Stage 4.
     </div>
 
-    <h3 style="margin:30px 0 0">The recipe, in plain terms</h3>
+    <h3 style="margin:30px 0 0">The recipe</h3>
     <div class="recipe">
-      <div class="step"><div class="n">1</div><h4>Reward winning</h4><p>+ points for solving, more for solving
-        faster. Every win beats every loss — so it never trades a sure win for a risky shortcut.</p></div>
-      <div class="step"><div class="n">2</div><h4>Show it a few expert escapes</h4><p>On the hardest traps it
-        might never stumble onto a probe by luck. So we slip in the expert's winning move now and then, just to
-        point the way.</p></div>
-      <div class="step"><div class="n">3</div><h4>A safety rule</h4><p>If the few remaining words fit in your
-        leftover guesses, just guess one — you can't lose. Only <i>probe</i> when truly stuck. All the learning
-        focuses on that one decision.</p></div>
-      <div class="step"><div class="n">4</div><h4>An "anchor" so it doesn't forget</h4><p>While learning the new
-        trick, gently hold its everyday play steady. Skip this and it learns probes but forgets the basics.</p></div>
+      <div class="step"><div class="n">1</div><h4>Terminal reward</h4><p><code>R = solved ? (7−turns) : 0</code>.
+        Every win dominates every loss, so win-rate is the primary objective; fewer guesses scores higher, so
+        the policy never probes gratuitously.</p></div>
+      <div class="step"><div class="n">2</div><h4>Teacher-seeded exploration</h4><p>On hard traps, on-policy
+        sampling rarely finds a winning probe. We inject the entropy teacher's trajectory into each GRPO group
+        so the group-relative advantage is non-zero exactly where learning is needed.</p></div>
+      <div class="step"><div class="n">3</div><h4>Hybrid rail</h4><p>When candidates ≤ guesses left,
+        enumerating can't lose — so mask. Only lift the mask (probe) when stuck. Folding this into the rollout
+        focuses every gradient on the probe decision itself.</p></div>
+      <div class="step"><div class="n">4</div><h4>KL anchor</h4><p>A KL penalty to the frozen BC reference on
+        normal states holds the rest of the policy in place while the stuck-state probes are reshaped.</p></div>
     </div>
 
     <div class="card">
       <h3 style="margin-top:0">The climb to 100%</h3>
-      <p class="note" style="margin-top:0">Win rate as training went on. It wobbles while exploring, then locks
-        onto the probing trick and tops out at a perfect score.</p>
+      <p class="note" style="margin-top:0">Hybrid win rate vs. training updates. High-variance while exploring,
+        then it locks the probes and saturates at a perfect score.</p>
       <div class="chart" id="rlChart"></div>
     </div>
 
     <div class="card">
-      <p style="margin-top:0"><b>An honest bump in the road.</b> One version hit a great score <i>with</i> the
-        safety rule but quietly became terrible <i>without</i> it — it had over-focused on traps and forgotten
-        normal play. The "anchor" (step 4) fixed it. Lesson: <b>always watch the number you're not optimizing.</b></p>
+      <p style="margin-top:0"><b>An instructive failure.</b> An earlier run hit 99.9% hybrid but collapsed to
+        <b>94.6% unmasked</b> — gradient focused on stuck states had rotted normal play, and the rail hid it at
+        eval. The KL anchor (step 4) fixed it. Lesson: <b>monitor the off-objective metric</b>, not just the one
+        you select on.</p>
     </div>
 
     <h3 style="margin:34px 0 0">Where every stage landed</h3>
     <table class="res">
-      <thead><tr><th>Player</th><th>Win rate</th><th>Avg guesses</th><th>Losses</th></tr></thead>
+      <thead><tr><th>Policy</th><th>Win rate</th><th>Avg guesses</th><th>Losses</th></tr></thead>
       <tbody>
-        <tr><td>Cloned net (Stage 2)</td><td class="num">99.4%</td><td class="num">3.62</td><td class="num">~14</td></tr>
+        <tr><td>Cloned (Stage 2)</td><td class="num">99.4%</td><td class="num">3.62</td><td class="num">~14</td></tr>
         <tr><td>+ fixed opener (Stage 4)</td><td class="num">99.7%</td><td class="num">3.55</td><td class="num">7</td></tr>
         <tr class="win"><td>+ RL probing (Stage 5) <span class="badge">final</span></td><td class="num">100.0%</td><td class="num">3.48</td><td class="num">0</td></tr>
-        <tr><td>The math expert (target)</td><td class="num">100.0%</td><td class="num">3.50</td><td class="num">0</td></tr>
+        <tr><td>Entropy teacher (target)</td><td class="num">100.0%</td><td class="num">3.50</td><td class="num">0</td></tr>
       </tbody>
     </table>
-    <p class="note" style="margin-top:14px">The final net matches the expert's perfect win rate — and is a hair
-      faster on average — with about a million numbers and one simple safety rule. The probing it does is its
-      <i>own</i>; the only help it keeps is the running still-possible list.</p>
+    <p class="note" style="margin-top:14px">The final policy matches the teacher's win rate — and edges its
+      average — with ~1M parameters and the hybrid rail. The probing is the network's own; the only solver
+      dependency it keeps is candidate tracking.</p>
 
     <div class="card">
-      <h3 style="margin-top:0">The whole journey, on one chart</h3>
+      <h3 style="margin-top:0">The whole pipeline, on one chart</h3>
       <div class="chart" id="progChart"></div>
       <div class="legend">
-        <span><i style="background:var(--gray)"></i>average guesses (lower is better)</span>
+        <span><i style="background:var(--gray)"></i>avg guesses (lower is better)</span>
         <span><i style="background:var(--green)"></i>win rate</span>
       </div>
     </div>
@@ -303,46 +302,47 @@
 <section id="play">
   <div class="wrap reveal">
     <div class="stage-tag">The payoff · Watch it play</div>
-    <h2>Let the agent solve any word</h2>
-    <p class="lede">Pick a secret word (or get a tricky one) and watch the finished agent solve it, one turn at
-      a time. It opens with <code>SLATE</code>, narrows the list, and — when it's cornered by look-alikes —
-      <b>probes</b>. That's the whole story in motion.</p>
+    <h2>Run the policy on any word</h2>
+    <p class="lede">Pick an answer (or pull a hard one) and step the finished policy through it. It opens
+      <code>SLATE</code>, tracks the candidate set, and — when the survivors no longer fit the budget —
+      <b>probes</b>. The full pipeline in motion.</p>
 
     <div class="card">
       <div class="controls">
-        <label class="fld">secret word <input type="text" id="gAnswer" maxlength="5" value="pound"></label>
-        <button class="btn" id="gStep">next guess</button>
+        <label class="fld">answer <input type="text" id="gAnswer" maxlength="5" value="pound"></label>
+        <button class="btn" id="gStep">step</button>
         <button class="btn ghost" id="gAuto">auto-solve</button>
-        <button class="btn ghost" id="gRandom">random word</button>
-        <button class="btn ghost" id="gTrap">give me a trap</button>
+        <button class="btn ghost" id="gRandom">random answer</button>
+        <button class="btn ghost" id="gTrap">hard one</button>
         <button class="btn ghost" id="gReset">reset</button>
       </div>
       <div id="gBoard" style="margin:18px 0"></div>
       <p id="gStatus" class="note" style="margin:0; min-height:1.5em"></p>
-      <div class="eli5" id="gExplain" style="margin-bottom:0">Press <b>next guess</b> to start. Each turn I'll
-        tell you what the agent is thinking — narrowing down, or probing to break a tie.</div>
+      <div class="eli5" id="gExplain" style="margin-bottom:0">Press <b>step</b> to start. Each move is
+        annotated — narrowing (best candidate) or a probe (non-candidate, played to split a tied set).</div>
     </div>
-    <p class="note" style="margin-top:14px">Running here in your browser is the <b>same strategy the trained net
-      learned</b> — pick the best candidate when the survivors fit the budget, otherwise spend a guess on the
-      information-richest probe. (The actual neural net is a 1M-number PyTorch model; this faithful JS twin
-      computes the identical decision so it can run instantly, with no download.)</p>
+    <p class="note" style="margin-top:14px">This runs the <b>hybrid-rail strategy the RL policy converged to</b>
+      — best candidate while survivors fit the budget, otherwise the max-entropy probe over the full pool. The
+      trained policy is a 1.04M-parameter PyTorch model; this JS twin computes the identical decision (greedy
+      entropy), so it runs instantly with no weights to download. Verified: <b>100% / 0 losses</b> over all
+      2,315, in-browser.</p>
   </div>
 </section>
 
 <!-- ===================== FOOTER ===================== -->
 <footer>
   <div class="wrap reveal">
-    <h3>Read the full research log</h3>
-    <p class="note" style="margin-top:0">This story is drawn from a three-part lab notebook. The notebooks have
-      the real numbers, code, and the dead-ends.</p>
+    <h3>The full research log</h3>
+    <p class="note" style="margin-top:0">This walkthrough condenses a three-part lab notebook with the real
+      numbers, code, and dead-ends.</p>
     <div class="linklist">
-      <a href="https://github.com/ihvo/wordle-solver">› The code on GitHub (ihvo/wordle-solver)</a>
-      <a href="../docs/2026-06-01-entropy-teacher-and-cloned-policies.md">› Part 1 — the teacher &amp; the cloned nets</a>
+      <a href="https://github.com/ihvo/wordle-solver">› Code on GitHub (ihvo/wordle-solver)</a>
+      <a href="../docs/2026-06-01-entropy-teacher-and-cloned-policies.md">› Part 1 — entropy teacher &amp; cloned policies</a>
       <a href="../docs/2026-06-02-probing-and-openers.md">› Part 2 — probing &amp; openers</a>
       <a href="../docs/2026-06-02-rl-post-training-to-100.md">› Part 3 — reinforcement learning to 100%</a>
     </div>
-    <p class="foot-note">Built with the Wordle answer list running live in your browser — the candidate counts and
-      letter bars above are the real thing. No tracking, no build step, just one folder of HTML/CSS/JS.</p>
+    <p class="foot-note">The candidate counts and letter marginals above are computed live from the real 2,315-word
+      answer list embedded in the page. No tracking, no build step — one folder of HTML/CSS/JS.</p>
   </div>
 </footer>
 
