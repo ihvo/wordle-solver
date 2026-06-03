@@ -103,10 +103,12 @@ def run(policy, vocab, p, *, is_model: bool, max_guesses: int = MAX_GUESSES) -> 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Interactive Wordle solver.")
     ap.add_argument("--model", type=Path, default=None, help="checkpoint path (overrides the flags below)")
-    ap.add_argument("--bc", action="store_true", help="use the behavior-cloned transformer (models/policy.pt)")
-    ap.add_argument("--mlp", action="store_true", help="use the candidate-only MLP (models/policy_mlp.pt)")
+    ap.add_argument("--rl", action="store_true", help="RL policy played hybrid (models/policy_rl.pt)")
+    ap.add_argument("--bc", action="store_true", help="behavior-cloned transformer (models/policy.pt)")
+    ap.add_argument("--mlp", action="store_true", help="candidate-only MLP (models/policy_mlp.pt)")
     ap.add_argument("--teacher", action="store_true", help="use the entropy solver, not the model")
-    ap.add_argument("--no-mask", action="store_true", help="let the model rank all words, not just consistent ones")
+    ap.add_argument("--safe", action="store_true", help="overlay the hybrid rail (guarantees valid endgame suggestions)")
+    ap.add_argument("--no-mask", action="store_true", help="force raw ranking over all words")
     ap.add_argument("--device", default="auto")
     args = ap.parse_args()
 
@@ -117,30 +119,37 @@ def main() -> None:
         run(EntropyTeacher(p), vocab, p, is_model=False)
         return
 
-    # Default = the RL policy played hybrid (mask when safe, probe when stuck) = 100%.
-    # The BC/MLP nets weren't RL-tuned to probe, so they play their best mode: masked.
+    # Default = the raw policy (models/policy_raw.pt): it internalized the rail, so it
+    # plays pure argmax (forced opener only) and still solves all 2315. --rl is the older
+    # hybrid-rail policy; --bc/--mlp play masked. mask/probe defaults per mode below.
     if args.model is not None:
-        model_path, hybrid = args.model, True
+        model_path, mask, probe = args.model, not args.no_mask, False
+    elif args.rl:
+        model_path, mask, probe = MODELS_DIR / "policy_rl.pt", True, True
     elif args.bc:
-        model_path, hybrid = MODELS_DIR / "policy.pt", False
+        model_path, mask, probe = MODELS_DIR / "policy.pt", True, False
     elif args.mlp:
-        model_path, hybrid = MODELS_DIR / "policy_mlp.pt", False
+        model_path, mask, probe = MODELS_DIR / "policy_mlp.pt", True, False
     else:
-        model_path, hybrid = MODELS_DIR / "policy_rl.pt", True
+        model_path, mask, probe = MODELS_DIR / "policy_raw.pt", False, False
+
+    if args.safe:        # opt back into the rail for guaranteed-valid suggestions
+        mask, probe = True, True
+    if args.no_mask:     # force raw
+        mask, probe = False, False
 
     if not model_path.exists():
         raise SystemExit(
             f"no model at {model_path}. Train one first, or run with --teacher.\n"
-            "  uv run python -m wordle_guesser.dataset --opener slate\n"
+            "  uv run python -m wordle_guesser.dataset --opener slate --state-aug\n"
             "  uv run python -m wordle_guesser.train --opener slate --epochs 24\n"
-            "  uv run python -m wordle_guesser.rl   # -> models/policy_rl.pt"
+            "  uv run python -m wordle_guesser.dagger ...   # -> models/policy_raw.pt"
         )
     device = pick_device(args.device)
     model, _ = load_checkpoint(model_path, map_location=str(device))
     policy = ModelPolicy(
         model, vocab, device=str(device),
-        mask_to_candidates=not args.no_mask,
-        probe_when_stuck=hybrid and not args.no_mask,
+        mask_to_candidates=mask, probe_when_stuck=probe,
     )
     run(policy, vocab, p, is_model=True)
 

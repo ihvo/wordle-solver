@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .encoding import candidate_features, encode_state, pad_batch
+from .encoding import CAND_DIM, CAND_DIM_AUG, candidate_features, encode_state, pad_batch
 from .model import load_checkpoint
 from .solver import MAX_GUESSES, EntropyTeacher, load_pattern_matrix, play_game
 from .train import MODELS_DIR, pick_device
@@ -45,6 +45,7 @@ def evaluate_model(
     letters = vocab.letters
     opener = getattr(model.config, "opener", None)
     opener_idx = vocab.index[opener] if opener else None
+    aug = getattr(model.config, "cand_dim", CAND_DIM) == CAND_DIM_AUG
     guesses = [[] for _ in range(n)]
     codes = [[] for _ in range(n)]
     candidates = [np.arange(n) for _ in range(n)]
@@ -54,9 +55,11 @@ def evaluate_model(
     for turn in range(max_guesses):
         if not active:
             break
+        remaining = max_guesses - turn  # guesses left including this one
+        rem = remaining if aug else None
         tok_arrays = [encode_state(guesses[i], codes[i], letters) for i in active]
         tokens, kpm = pad_batch(tok_arrays)
-        feats = np.stack([candidate_features(candidates[i], letters) for i in active])
+        feats = np.stack([candidate_features(candidates[i], letters, rem) for i in active])
         logits = (
             model(
                 torch.from_numpy(tokens).to(device),
@@ -67,7 +70,6 @@ def evaluate_model(
             .cpu()
             .numpy()
         )
-        remaining = max_guesses - turn  # guesses left including this one
         still_active = []
         for row, i in enumerate(active):
             lg = logits[row]
@@ -109,7 +111,7 @@ def _print_row(label: str, m: dict) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Evaluate the Wordle policy vs the teacher.")
-    ap.add_argument("--model", type=Path, default=MODELS_DIR / "policy_rl.pt")
+    ap.add_argument("--model", type=Path, default=MODELS_DIR / "policy_raw.pt")
     ap.add_argument("--device", default="auto")
     args = ap.parse_args()
 
@@ -124,9 +126,9 @@ def main() -> None:
 
     print(f"device: {device}   model: {args.model.name}\n")
     _print_row("teacher (entropy)", summarize(evaluate_teacher(vocab, p)))
+    _print_row("model (raw)", summarize(evaluate_model(model, vocab, p, device, False)))
     _print_row("model (hybrid)", summarize(evaluate_model(model, vocab, p, device, True, probe_when_stuck=True)))
     _print_row("model (masked)", summarize(evaluate_model(model, vocab, p, device, True)))
-    _print_row("model (raw, unmasked)", summarize(evaluate_model(model, vocab, p, device, False)))
 
 
 if __name__ == "__main__":

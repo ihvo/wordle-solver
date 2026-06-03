@@ -26,8 +26,8 @@ Turn 3 — 6 candidate(s) — suggested: CHILD
 ...
 ```
 
-Handy flags: `--bc` (the behavior-cloned net), `--mlp` (smaller model), `--teacher` (pure
-solver, no model), `--no-mask`.
+Handy flags: `--rl` (the hybrid-rail policy), `--safe` (rail overlay, guaranteed-valid
+suggestions), `--bc` (behavior-cloned net), `--mlp` (smaller model), `--teacher` (pure solver).
 
 ## How well does it play?
 
@@ -35,16 +35,19 @@ Over all 2315 answers:
 
 | Policy | Win | Avg guesses | Losses |
 |---|---|---|---|
-| **RL (default)** | **100.0%** | **3.48** | **0** |
+| **Default (raw)** | **100.0%** | **3.46** | **0** |
+| RL + hybrid rail (`--rl`) | 100.0% | 3.48 | 0 |
 | Behavior-cloned (`--bc`) | 99.7% | 3.55 | 7 |
 | Entropy solver (`--teacher`) | 100.0% | 3.50 | 0 |
 
-The default is a **1.04M-param net post-trained with RL** to match the solver's perfect
-win rate. It plays a *hybrid* policy: while the remaining candidates fit the guess budget
-it just picks one (it can't lose by enumerating), but once they outnumber the budget it
-**probes** — spends a guess on a non-candidate word that splits the survivors. That probe
-is the only way to crack the neighbour-traps (`bound/found/hound/…`, `watch/match/…`), and
-it's what behavior cloning alone could never learn.
+The default is a **1.04M-param net** that **probes on its own** — playing pure `argmax` over
+the whole word list (no candidate mask, no rules), it solves every answer. Probing means
+spending a guess on a *non-candidate* word that splits a cluster of look-alikes
+(`bound/found/hound/…`, `watch/match/…`) — the only way to crack those traps, and something
+behavior cloning could never learn. We first taught it with a safety rail (still available
+via `--rl`/`--safe`), then **folded that rail into the network** by giving it the two features
+the rule needs (how many candidates remain, how many guesses are left) and imitating the
+expert with DAgger.
 
 All policies open **SLATE** — a fixed first move forced at play time, *not* learned by the
 net (the opening is one deterministic state, so it's a chosen constant).
@@ -53,10 +56,12 @@ net (the opening is one deterministic state, so it's a chosen constant).
 
 Wordle is an information-theory problem, not a language one. The interesting results are
 **how small** a net reaches the optimum (attention turned out unnecessary — a 3-layer MLP
-matches the transformer), and that the last 0.3% — the probing the solver does for free —
-had to be earned with **RL on the terminal win**, because no supervised label can teach a
-move whose entire value is a multi-step setup. The 100% leans on the solver's exact
-candidate tracking (the rail); the net's own unaided raw play is ~99.3%.
+matches the transformer), and that the last 0.3% — *probing* — couldn't be learned from
+supervised labels (a probe's value is a multi-step setup). It took reinforcement learning to
+discover it, then a representation fix (exposing the candidate count + remaining guesses) to
+let the network internalize the rule and play raw, with no inference-time rail. The solver
+still tracks the candidate set to build the net's input — that dependency stays; the rail is
+just no longer required.
 
 ## More
 
@@ -66,6 +71,7 @@ Play / train / test commands, the design story, and how to extend it live in
 1. **[Entropy teacher & cloned policies](docs/2026-06-01-entropy-teacher-and-cloned-policies.md)** — the baseline, the BC transformer, and the perceptron that matched it.
 2. **[Probing vs. openers](docs/2026-06-02-probing-and-openers.md)** — diagnosing the gap, the failed relabel, the SLATE opener.
 3. **[RL post-training to 100%](docs/2026-06-02-rl-post-training-to-100.md)** — teaching the net to probe with RL.
+4. **[Deprecating the rail](docs/2026-06-03-deprecating-the-rail.md)** — C/R features + DAgger fold the rail into the net; raw play hits 100%.
 
 Prefer it interactive? Open **[`site/index.html`](site/index.html)** in any browser — a
 beginner-friendly walkthrough of all five stages with live demos (the feedback engine, the

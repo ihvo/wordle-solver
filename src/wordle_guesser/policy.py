@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from .encoding import candidate_features, encode_state, pad_batch
+from .encoding import CAND_DIM, CAND_DIM_AUG, candidate_features, encode_state, pad_batch
 from .solver import MAX_GUESSES, GameState
 
 
@@ -34,6 +34,7 @@ class ModelPolicy:
         self.device = device
         self.mask_to_candidates = mask_to_candidates
         self.probe_when_stuck = probe_when_stuck
+        self.aug = getattr(model.config, "cand_dim", CAND_DIM) == CAND_DIM_AUG
         # The opening is a fixed, known move — play it directly rather than asking
         # the net to recall a single training example (which it does unreliably).
         op = getattr(model.config, "opener", None)
@@ -43,7 +44,8 @@ class ModelPolicy:
     def logits(self, state: GameState) -> torch.Tensor:
         tok = encode_state(state.guesses, state.codes, self.vocab.letters)
         tokens, mask = pad_batch([tok])
-        feats = candidate_features(state.candidates, self.vocab.letters)[None, :]
+        rem = (MAX_GUESSES - state.turn) if self.aug else None
+        feats = candidate_features(state.candidates, self.vocab.letters, rem)[None, :]
         out = self.model(
             torch.from_numpy(tokens).to(self.device),
             torch.from_numpy(mask).to(self.device),

@@ -9,25 +9,26 @@ probable next guess**. Training a neural net with PyTorch is a hard requirement 
 optional add-on). An entropy-maximizing solver serves as the teacher, baseline, and
 exact constraint engine the model rides on.
 
-## Status (2026-06-02)
+## Status (2026-06-03)
 
 - **Done:** vectorized feedback engine; entropy teacher (100% win, 3.50 avg over all
-  2315 answers); transformer policy behavior-cloned from it (99.7% win, 3.55 avg masked);
-  candidate-only **MLP** alternative (0.34M params); all seeded from and forced to open
-  **SLATE** (see Conventions); interactive CLI; **27 passing tests**. Checkpoints committed
-  under `models/`.
-- **RL post-training → 100% (the headline).** `rl.py` post-trains the BC transformer with
-  GRPO + teacher-demo exploration to learn *probing*. Played **hybrid** (mask while
-  candidates fit the budget, probe when stuck — see Conventions) the RL checkpoint
-  `models/policy_rl.pt` is **100% win, 3.481 avg, 0 losses** over all 2315 — matching the
-  full-pool teacher's win rate. This is the new CLI/evaluate default. Raw (unmasked) play
-  stays healthy at 99.3% thanks to a BC anchor; masked-only is 99.6%.
-- **The earlier "probing can't be distilled" result still holds — and is *why* RL works.**
-  Behavior cloning of full-pool probe labels failed (the net can't *rank* a probe whose
-  value is a multi-step setup). RL succeeds because it optimises the terminal win directly:
-  a probe's payoff is a return, not a per-state label. See Findings log.
-- **Not done (see Next steps):** push hybrid avg 3.481 → teacher's 3.45; the full ~10.6k
-  allowed-guess action space; shrink the head at iso-quality.
+  2315 answers); transformer policy behavior-cloned from it; candidate-only **MLP** (0.34M);
+  all forced to open **SLATE** (see Conventions); interactive CLI; **29 passing tests**.
+  Checkpoints committed under `models/`.
+- **RL post-training → 100% (hybrid).** `rl.py` post-trains the BC transformer with GRPO +
+  teacher-demo exploration to learn *probing*. Played **hybrid** (mask while candidates fit
+  the budget, probe when stuck) `models/policy_rl.pt` is 100% / 3.481 / 0 losses. See Part 3.
+- **The rail is now internalized → raw 100% (the current headline).** Adding the candidate
+  *count* + *remaining guesses* to the features (156-d **→ 170-d**, `CAND_DIM_AUG`) and
+  **DAgger**-ing the raw net on the hybrid expert (`dagger.py`) gives `models/policy_raw.pt`:
+  **100% win, 3.461 avg, 0 losses playing pure raw `argmax`** — no mask, no probe branch
+  (forced opener only). It internalized the rail; raw == hybrid. New CLI/evaluate default.
+  See Part 4 / memory `rail-internalized-via-dagger`.
+- **Why earlier supervised relabel failed but DAgger worked:** the rail tests `C ≤ R`, and the
+  *normalized* 156-d features hide the candidate count (and the MLP the budget) — the decision
+  wasn't observable. With C/R in the input, imitation of the 100% expert suffices (no RL).
+- **Not done (see Next steps):** trim raw avg 3.461 → ~3.45; full ~10.6k allowed-guess action
+  space; shrink the head at iso-quality.
 
 ## Setup
 
@@ -45,16 +46,19 @@ dataset seeds from it, the model bakes it into `config.opener` and forces it at 
 2. `uv run python -m wordle_guesser.train --opener slate --epochs 24` → BC transformer to `models/policy.pt`
    - MLP variant: add `--no-history --out models/policy_mlp.pt`
    - the opener needs ~24 epochs to land cleanly; 12 undertrains the post-SLATE states
-3. **RL post-train → 100%:** `uv run python -m wordle_guesser.rl` warm-starts from
-   `models/policy.pt`, plays unmasked under the safety rail, and saves the best hybrid
-   checkpoint to `models/policy_rl.pt` (~700 updates, a few minutes on MPS). Selects on the
-   hybrid win-rate it deploys with; watch the printed `raw %` to confirm the anchor holds.
-4. `uv run python -m wordle_guesser.evaluate [--model PATH]` → teacher / **hybrid** / masked / raw
-5. `uv run pytest` before committing
+3. **RL post-train → 100% hybrid:** `uv run python -m wordle_guesser.rl` warm-starts from
+   `models/policy.pt`, plays unmasked under the safety rail → `models/policy_rl.pt`. Selects
+   on the hybrid win-rate; watch the printed `raw %` to confirm the BC anchor holds.
+4. **Deprecate the rail → raw 100%:** with `dataset --state-aug` + `train`, get a 170-d BC
+   net (`models/policy_aug.pt`); then **DAgger** it on the hybrid expert:
+   `dagger ... | train --init ... | evaluate`, iterating with `dagger --student <ckpt>` to
+   cover the student's own raw states. ~3 rounds take raw 99.3 → 100. Ships `models/policy_raw.pt`.
+5. `uv run python -m wordle_guesser.evaluate [--model PATH]` → teacher / **raw** / hybrid / masked
+6. `uv run pytest` before committing
 
 ### Play / debug a single game
-`uv run wordle-guesser [--bc|--mlp|--teacher|--no-mask|--model PATH]`. Default is the RL
-policy played hybrid. The pattern matrix (`data/patterns_answers.npy`) rebuilds on first run.
+`uv run wordle-guesser [--rl|--bc|--mlp|--teacher|--safe|--no-mask|--model PATH]`. Default is
+the raw policy (`policy_raw.pt`) playing pure argmax. The pattern matrix rebuilds on first run.
 
 ## Key decisions
 
@@ -62,11 +66,12 @@ policy played hybrid. The pattern matrix (`data/patterns_answers.npy`) rebuilds 
 
 | Need | Use |
 |---|---|
-| Best play (100%, default) | RL + hybrid — `models/policy_rl.pt` (no flag) |
+| Best play (100%, default) | raw — `models/policy_raw.pt` (no flag; pure argmax, no rail) |
+| The RL hybrid policy (rail on) | `--rl` (`models/policy_rl.pt`) |
+| Guaranteed-valid suggestions | `--safe` (overlay the rail on any model) |
 | The behavior-cloned transformer | `--bc` (`models/policy.pt`, masked) |
 | Smallest model | MLP — `--mlp` (`use_history=False`, masked) |
 | No model, pure baseline | `--teacher` |
-| See the model's unaided picks | `--no-mask` |
 
 **Distillation target** (`dataset._soft_target`, the crux of model quality):
 
@@ -90,12 +95,18 @@ policy played hybrid. The pattern matrix (`data/patterns_answers.npy`) rebuilds 
   turn 1 and bypass the net. Greedy max-entropy (RAISE) is *myopic*: it wins turn-1 info
   but loses overall. SLATE/TRACE/LEAST/CRATE (~3.52 by expected guesses) beat RAISE (3.58);
   RAISE has the *highest* opening entropy and one of the *worst* averages.
-- **The hybrid rail is the deploy policy — probing and masking are mutually exclusive.**
-  A probe is a *non-candidate* word, so the candidate mask forbids it. The rule
-  (`ModelPolicy(probe_when_stuck=True)`, `evaluate_model(probe_when_stuck=True)`): keep the
-  mask while `len(candidates) ≤ guesses_left` (enumerating can't lose), lift it once they
-  outnumber the budget so the net can probe. This is exact and free, and only the RL net
-  was *trained* to probe — `--bc`/`--mlp` play masked (their best mode).
+- **The default `policy_raw.pt` plays *raw* (pure argmax, no rail) and is 100%.** It uses the
+  **170-d** features (`CAND_DIM_AUG`: 156-d marginals + `log C` + count-bucket + remaining-
+  guesses one-hot) and was DAgger'd on the hybrid expert, so it internalized `C ≤ R` and probes
+  on its own. `ModelPolicy`/`evaluate_model` auto-detect aug from `config.cand_dim` and feed
+  `remaining`. The **hybrid rail still exists** as a free safety net (`--safe`, or `--rl` for the
+  Part-3 policy) — probing and masking are mutually exclusive (a probe is a non-candidate, so a
+  candidate mask forbids it), so the rail keeps the mask while `len(candidates) ≤ guesses_left`
+  and lifts it when stuck. It's just no longer *required*.
+- **Don't normalize away a feature a downstream rule needs.** The 156-d marginals are fractions,
+  so they hid the candidate *count* — the very thing the rail tests. That's why supervised
+  probing failed for ages; the fix was adding C/R to the input, not a bigger net. When a net
+  "can't learn" a rule, check its inputs first.
 - **RL trains only the stuck decision; the BC anchor protects the rest.** All policy
   gradient lands on stuck states; a frozen KL anchor on a sample of *normal* (non-stuck)
   states keeps unmasked play from rotting. Drop the anchor and raw play collapses (94.6%)
@@ -115,7 +126,7 @@ policy played hybrid. The pattern matrix (`data/patterns_answers.npy`) rebuilds 
 
 ## Findings log (how we got here)
 
-> Full narrative with numbers: the **[docs/](docs/)** research log (3 parts).
+> Full narrative with numbers: the **[docs/](docs/)** research log (4 parts).
 
 1. Transformer over `(guess, feedback)` history alone → **failed**, stuck at the
    random-consistent baseline (~4.06 avg). The candidate set, not the history, is the
@@ -133,10 +144,16 @@ policy played hybrid. The pattern matrix (`data/patterns_answers.npy`) rebuilds 
    rail into the loop so gradient hits only the stuck decision; select on the hybrid metric
    you deploy; anchor the rest. The 99.7→100 gain *is* the ~7 neighbour-trap answers
    (`-ound`, `-atch`, `-aunt`, `-aste`, `-ight`).
+5. **The rail can be internalized — raw play to 100% (no RL).** The rail tests `C ≤ R`, but
+   the normalized 156-d features hide the count and the MLP the budget — the decision wasn't
+   observable. Adding C/R (→170-d) and **DAgger**-ing the raw net on the hybrid expert took raw
+   99.3→99.7→99.9→**100** over three rounds. Imitation sufficed once the decision was in the
+   input; no reward needed. The forced opener stays.
 
 The model is essentially a learned ranker over the candidate set; the solver does the exact
-constraint propagation, and on the stuck states the RL net has learned to *probe*. See the
-memory notes `candidate-set-is-sufficient-statistic` and `rl-probing-reaches-100`.
+constraint propagation, and the net has learned to *probe* — under the rail (`policy_rl.pt`) or,
+with C/R features, on its own (`policy_raw.pt`). See memory notes
+`candidate-set-is-sufficient-statistic`, `rl-probing-reaches-100`, `rail-internalized-via-dagger`.
 
 ## Module map
 
@@ -145,19 +162,20 @@ memory notes `candidate-set-is-sufficient-statistic` and `rl-probing-reaches-100
 | `words.py` | Word lists + compact vocabulary (letter-index arrays). |
 | `feedback.py` | Green/yellow/gray with correct duplicate handling; scalar + vectorized. |
 | `solver.py` | Pattern matrix, vectorized entropy selection, candidate filtering, game env, teacher. |
-| `encoding.py` | History tokenization (`encode_state`) + candidate features (`candidate_features`). |
+| `encoding.py` | `encode_state` + `candidate_features` (156-d; +C/R → 170-d `CAND_DIM_AUG`). |
 | `model.py` | `WordlePolicy` (`use_history`, `factored_head` flags) + save/load. |
-| `dataset.py` | Self-play + DAgger exploration → blended soft-target examples. |
-| `train.py` | Soft-cross-entropy (BC) training loop. |
-| `rl.py` | **RL post-training:** GRPO + teacher demos + BC anchor → `policy_rl.pt` (probing → 100%). |
-| `evaluate.py` | Batched full-vocab play; `probe_when_stuck` gives the hybrid policy. |
-| `policy.py` | Checkpoint → `GameState → guess` wrapper; `probe_when_stuck` for the hybrid rail. |
-| `cli.py` | Interactive solver (default = RL + hybrid). |
+| `dataset.py` | Self-play → blended soft-target examples; `--state-aug` for 170-d features. |
+| `train.py` | Soft-cross-entropy (BC) loop; `--init` warm-start; infers `cand_dim` from data. |
+| `rl.py` | **RL post-training:** GRPO + teacher demos + BC anchor → `policy_rl.pt` (hybrid 100%). |
+| `dagger.py` | **DAgger:** imitate the hybrid expert with C/R features → `policy_raw.pt` (raw 100%). |
+| `evaluate.py` | Batched full-vocab play; `probe_when_stuck` gives the hybrid; default `policy_raw.pt`. |
+| `policy.py` | Checkpoint → `GameState → guess` wrapper; auto-aug; `probe_when_stuck` rail. |
+| `cli.py` | Interactive solver (default = raw `policy_raw.pt`; `--rl`/`--safe`/`--bc`/`--mlp`). |
 
 ## Next steps
 
-- **Hybrid avg 3.481 → 3.45:** the win rate is maxed; trim guesses. Reward already favours
-  speed — try a longer/lower-LR RL tail, or shape lightly once 100% is locked.
+- **Raw avg 3.461 → 3.45:** win rate is maxed; trim guesses (a short RL/DAgger tail, or a
+  speed-weighted target).
 - **Full allowed-guess action space (~10.6k):** richer probes than the answer list allows;
   needs a new output head (breaks current checkpoints) and more exploration.
 - **Shrink further:** the candidate-only MLP's params are ~90% output head — a factored

@@ -4,6 +4,7 @@ import numpy as np
 
 from wordle_guesser.encoding import (
     CAND_DIM,
+    CAND_DIM_AUG,
     MAX_LEN,
     TOK_PAD,
     TOK_START,
@@ -59,6 +60,21 @@ def test_candidate_features_empty_set():
     vocab = load_vocabulary()
     feat = candidate_features(np.array([], dtype=int), vocab.letters)
     assert feat.shape == (CAND_DIM,) and not feat.any()
+
+
+def test_candidate_features_state_aug():
+    """With ``remaining`` set, append count + budget features (170-d)."""
+    vocab = load_vocabulary()
+    cands = np.array([vocab.encode("pound"), vocab.encode("bound")])
+    feat = candidate_features(cands, vocab.letters, remaining=2)
+    assert feat.shape == (CAND_DIM_AUG,)
+    extra = feat[CAND_DIM:]
+    assert 0.0 < extra[0] < 1.0           # log-count, normalized
+    assert extra[1 + 2] == 1.0            # count bucket = 2 candidates
+    assert extra[8 + (2 - 1)] == 1.0      # remaining-guesses one-hot at R=2
+    assert extra.sum() == extra[0] + 2.0  # logC + two one-hots
+    # the 156-d prefix is unchanged from the un-augmented call
+    assert np.array_equal(feat[:CAND_DIM], candidate_features(cands, vocab.letters))
 
 
 def test_pad_batch_shapes_and_mask():

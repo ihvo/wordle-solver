@@ -76,6 +76,7 @@ def main() -> None:
     ap.add_argument("--no-history", action="store_true", help="drop the transformer; candidate features only")
     ap.add_argument("--factored-head", action="store_true", help="letter-factored word head")
     ap.add_argument("--opener", default=None, help="fixed turn-1 word, forced at inference (match the dataset's --opener)")
+    ap.add_argument("--init", type=Path, default=None, help="warm-start from this checkpoint (same architecture)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="auto")
     args = ap.parse_args()
@@ -107,11 +108,16 @@ def main() -> None:
         nhead=args.heads,
         num_layers=args.layers,
         dim_feedforward=args.ff,
+        cand_dim=feats.size(1),  # 156, or 170 with --state-aug features
         use_history=not args.no_history,
         factored_head=args.factored_head,
         opener=opener,
     )
     model = WordlePolicy(config, word_letters=vocab.letters).to(device)
+    if args.init:  # warm-start (e.g. DAgger from the augmented BC checkpoint)
+        ckpt = torch.load(args.init, map_location=str(device), weights_only=False)
+        model.load_state_dict(ckpt["state_dict"])
+        print(f"warm-started from {args.init}")
     n_params = sum(p.numel() for p in model.parameters())
     print(f"model: {n_params/1e6:.2f}M params")
 

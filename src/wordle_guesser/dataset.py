@@ -66,6 +66,7 @@ def generate(
     seed: int = 0,
     max_guesses: int = MAX_GUESSES,
     opener: str | None = None,
+    state_aug: bool = False,
 ):
     """Self-play data distilling the candidate-entropy ranking (soft targets).
 
@@ -83,7 +84,7 @@ def generate(
     idx_rows: list[np.ndarray] = []
     w_rows: list[np.ndarray] = []
 
-    def record(toks, candidates, force_label=None):
+    def record(toks, candidates, n_prior, force_label=None):
         key = tuple(toks.tolist())
         if key in seen:
             return
@@ -97,7 +98,8 @@ def generate(
         row_i[: len(idx)] = idx
         row_w[: len(w)] = w
         tokens.append(toks)
-        feats.append(candidate_features(candidates, letters))
+        remaining = max_guesses - n_prior if state_aug else None
+        feats.append(candidate_features(candidates, letters, remaining))
         idx_rows.append(row_i)
         w_rows.append(row_w)
 
@@ -106,7 +108,7 @@ def generate(
     # "slate") seeds easier continuations and a lower average. The recorded label
     # is still the opener, so the model memorizes whichever opening we seed from.
     opening = vocab.encode(opener) if opener else best_guess(p, all_words, pool=all_words)
-    record(encode_state([], [], letters), all_words, force_label=opening if opener else None)
+    record(encode_state([], [], letters), all_words, 0, force_label=opening if opener else None)
 
     for _ in range(passes):
         for answer in rng.permutation(n):
@@ -119,7 +121,7 @@ def generate(
             for _turn in range(1, max_guesses):
                 if len(candidates) == 0 or guesses[-1] == answer:
                     break
-                record(encode_state(guesses, codes, letters), candidates)
+                record(encode_state(guesses, codes, letters), candidates, len(guesses))
 
                 target = best_guess(p, candidates, pool=candidates)
                 explore = len(candidates) > 1 and rng.random() < epsilon
@@ -147,6 +149,8 @@ def main() -> None:
     ap.add_argument("--opener", default=None,
                     help="seed self-play from this opening word (default: teacher's max-entropy pick)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--state-aug", action="store_true",
+                    help="append candidate-count + remaining-guesses features (170-d); for deprecating the rail")
     ap.add_argument("--out", type=Path, default=DATA_DIR / "bc_dataset.npz")
     args = ap.parse_args()
 
@@ -166,10 +170,11 @@ def main() -> None:
         alpha=args.alpha,
         seed=args.seed,
         opener=args.opener.lower() if args.opener else None,
+        state_aug=args.state_aug,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(args.out, tokens=tokens, feats=feats, tgt_idx=tgt_idx, tgt_w=tgt_w)
-    print(f"wrote {len(tokens)} unique states to {args.out}")
+    print(f"wrote {len(tokens)} unique states to {args.out}  (feat dim {feats.shape[1]})")
 
 
 if __name__ == "__main__":

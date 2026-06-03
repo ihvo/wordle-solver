@@ -1,8 +1,9 @@
 # Building the base: an entropy teacher and the nets that cloned it
 
-*Research log — 2026-06-01 to 06-02. Author: Ihar + Clawd. The origin of the project. Part 1 of 3; continues in
+*Research log — 2026-06-01 to 06-02. Author: Ihar + Clawd. The origin of the project. Part 1 of 4; continues in
 [probing-and-openers](2026-06-02-probing-and-openers.md) →
-[rl-post-training-to-100](2026-06-02-rl-post-training-to-100.md).*
+[rl-post-training-to-100](2026-06-02-rl-post-training-to-100.md) →
+[deprecating-the-rail](2026-06-03-deprecating-the-rail.md).*
 
 ## TL;DR
 

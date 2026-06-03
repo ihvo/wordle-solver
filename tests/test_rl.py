@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from wordle_guesser.encoding import CAND_DIM_AUG
 from wordle_guesser.model import load_checkpoint
 from wordle_guesser.policy import ModelPolicy
 from wordle_guesser.rl import answer_weights, precompute_teacher_demos, reward_for
@@ -78,3 +79,17 @@ def test_rl_hybrid_policy_wins_neighbour_traps(vocab, pmatrix):
     for w in ("pound", "bound", "vaunt", "watch", "foyer"):
         _g, _c, solved = play_game(vocab.encode(w), hybrid, pmatrix, len(vocab))
         assert solved, f"hybrid policy lost {w!r}"
+
+
+def test_raw_policy_probes_without_the_rail(vocab, pmatrix):
+    """The shipped raw policy (aug features) solves the traps playing pure argmax —
+    no candidate mask, no probe branch — i.e. it internalized the rail."""
+    ckpt = MODELS_DIR / "policy_raw.pt"
+    if not ckpt.exists():
+        pytest.skip("raw checkpoint not built yet (run the DAgger pipeline)")
+    model, _ = load_checkpoint(ckpt)
+    assert model.config.cand_dim == CAND_DIM_AUG  # uses the count/budget features
+    raw = ModelPolicy(model, vocab, mask_to_candidates=False, probe_when_stuck=False)
+    for w in ("pound", "bound", "vaunt", "watch", "foyer", "taste", "wound"):
+        _g, _c, solved = play_game(vocab.encode(w), raw, pmatrix, len(vocab))
+        assert solved, f"raw policy lost {w!r}"

@@ -24,36 +24,61 @@ N_TOKENS = 80
 
 CAND_DIM = WORD_LEN * 26 + 26  # 156: per-position freqs (130) + letter-present freqs (26)
 
+# Optional state-size augmentation appended when ``remaining`` is supplied. The
+# 156-d marginals are *normalized* (fractions), so they discard the candidate
+# *count* and carry no notion of the guess budget — exactly the inputs the
+# hybrid rail's ``candidates <= guesses_left`` test needs. These extra dims expose
+# both so a raw (unmasked) policy can, in principle, learn to probe only when
+# stuck — and the rail can be deprecated. Layout: [logC | count-bucket(7) | R-onehot(6)].
+EXTRA_DIM = 1 + 7 + 6  # 14
+CAND_DIM_AUG = CAND_DIM + EXTRA_DIM  # 170
+
 _POW3 = (1, 3, 9, 27, 81)
 
 
-def candidate_features(candidates: np.ndarray, letters: np.ndarray) -> np.ndarray:
-    """Summarize the remaining candidate set as a (156,) float32 vector.
+def _state_extra(n: int, vocab_size: int, remaining: int) -> np.ndarray:
+    """Count/budget features: normalized log-count, a small-count bucket, and a
+    one-hot of remaining guesses (1..6)."""
+    extra = np.zeros(EXTRA_DIM, dtype=np.float32)
+    extra[0] = np.log1p(n) / np.log1p(vocab_size)   # candidate count, log-normalized to [0,1]
+    extra[1 + min(n, 6)] = 1.0                       # bucket: 0,1,2,3,4,5,6+ candidates
+    r = int(min(max(remaining, 1), 6))
+    extra[8 + (r - 1)] = 1.0                          # remaining guesses, one-hot
+    return extra
 
-    Two views, because entropy depends on more than per-slot marginals:
+
+def candidate_features(
+    candidates: np.ndarray, letters: np.ndarray, remaining: int | None = None
+) -> np.ndarray:
+    """Summarize the remaining candidate set as a float32 vector.
+
+    Two views (156-d), because entropy depends on more than per-slot marginals:
 
     * per-slot letter frequencies (5×26): fraction of candidates with each
       letter in each slot — drives green/position information.
     * letter-present frequencies (26): fraction of candidates containing each
       letter anywhere — drives yellow/presence information.
 
-    Together these are (close to) the sufficient statistic the entropy ranking
-    depends on, which is what makes the next-guess decision learnable.
+    These are (close to) the sufficient statistic the entropy ranking depends on.
+    If ``remaining`` (guesses left, incl. the current one) is given, append the
+    ``EXTRA_DIM`` count/budget features → a (170,) vector (see ``CAND_DIM_AUG``).
     """
     pos = np.zeros((WORD_LEN, 26), dtype=np.float32)
     present = np.zeros(26, dtype=np.float32)
     n = len(candidates)
-    if n == 0:
-        return np.concatenate([pos.ravel(), present])
-    sub = letters[candidates]  # (n, 5)
-    has = np.zeros((n, 26), dtype=bool)
-    rows = np.arange(n)
-    for i in range(WORD_LEN):
-        np.add.at(pos[i], sub[:, i], 1.0)
-        has[rows, sub[:, i]] = True
-    pos /= n
-    present = has.mean(axis=0).astype(np.float32)
-    return np.concatenate([pos.ravel(), present])
+    if n:
+        sub = letters[candidates]  # (n, 5)
+        has = np.zeros((n, 26), dtype=bool)
+        rows = np.arange(n)
+        for i in range(WORD_LEN):
+            np.add.at(pos[i], sub[:, i], 1.0)
+            has[rows, sub[:, i]] = True
+        pos /= n
+        present = has.mean(axis=0).astype(np.float32)
+    base = np.concatenate([pos.ravel(), present])
+    if remaining is None:
+        return base
+    return np.concatenate([base, _state_extra(n, len(letters), remaining)]).astype(np.float32)
 
 
 def encode_state(
