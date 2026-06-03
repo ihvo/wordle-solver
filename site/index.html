@@ -341,9 +341,9 @@
       few stubborn losses — a theorem (the rail) vs. a function approximator. It hit exactly zero. And plain
       <b>imitation</b> got there — the reinforcement-learning polish we'd planned wasn't needed once the
       decision was observable. Two caveats: the result is an <i>empirical</i> 0 over the closed set of 2,315
-      answers (complete for this net, not a proof), and the <b>opener stays forced</b> — one deterministic state
-      the net learns unreliably. The rail still ships as a free safety net (<code>--safe</code>); it's just no
-      longer required.
+      answers (complete for this net, not a proof), and <b>this</b> net keeps the opener forced — though the
+      solver-free net below shows even that can be learned. The rail still ships as a free safety net
+      (<code>--safe</code>); it's just no longer required.
     </div>
   </div>
 </section>
@@ -411,17 +411,21 @@
 
     <!-- History-only cross-attention -->
     <div class="card">
-      <h3 style="margin-top:0">History-only net <span class="mtag">no solver · 0.5M params</span></h3>
+      <h3 style="margin-top:0">History-only net <span class="mtag">no solver, no rules · 0.5M params</span></h3>
       <div class="diagram" id="archXattn"></div>
-      <p style="margin-bottom:0">The experiment from the <i>Rail-free</i> follow-up taken to its limit: drop the
-        candidate features <b>entirely</b> and read only the move history. The catch is the readout — a single
-        summary vector can't say which of 2,315 words are still consistent. So each word (embedded from its
-        letters) is the <b>query</b> in a <b>cross-attention</b> over the encoded history (the keys/values), and
-        is scored against its own attended context. That per-word × history interaction lets the net check its
-        own candidacy. Played raw it reaches <b>100% from tokens alone</b> — no candidate set ever computed for
-        the policy — proving the solver's tracking isn't required. Getting there took three different fixes: the
-        cross-attention readout (→99.87%), a solver-free <b>duplicate-letter feature</b> (the brittle cases), and
-        a <b>raw-RL</b> polish optimising the win objective directly (the last two losses).</p>
+      <p>The experiment from the <i>Rail-free</i> follow-up taken to its limit: drop the candidate features
+        <b>entirely</b> and read only the move history. The catch is the readout — a single summary vector can't
+        say which of 2,315 words are still consistent. So each word (embedded from its letters) is the <b>query</b>
+        in a <b>cross-attention</b> over the encoded history (the keys/values), and is scored against its own
+        attended context. That per-word × history interaction lets the net check its own candidacy. Played raw it
+        reaches <b>100% from tokens alone</b> — no candidate set ever computed for the policy. Getting there took
+        three fixes: the cross-attention readout (→99.87%), a solver-free <b>duplicate-letter feature</b> (the
+        brittle cases), and a <b>raw-RL</b> polish optimising the win objective (the last two losses).</p>
+      <p style="margin-bottom:0">It even <b>learns its own opener</b>. Turn 1 used to be hard-coded (one
+        deterministic state a net under-trains on). But played in <i>every</i> RL game it gets the most gradient
+        of any state — given the chance, the net commits to opening <code>SLATE</code> on its own (0.999
+        confidence) and still solves all 2,315. So this is a <b>completely rule-free policy</b>: tokens in, guess
+        out — no candidate set, no rail, no forced opener.</p>
     </div>
 
     <div class="diaglegend">

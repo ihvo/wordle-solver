@@ -15,7 +15,8 @@ history alone? **Yes — and perfectly.** A 0.5M-param history-only net reaches 
 playing token-only** (no candidate features, proven by random-feature invariance), avg 3.464.
 The original history-only net sat at random (~4.06); three things got it to 100%: a
 **cross-attention readout** (the structural unlock), a **duplicate-letter feature** derived from
-the guess, and a **raw-GRPO** polish that optimised the win objective directly.
+the guess, and a **raw-GRPO** polish that optimised the win objective directly. And it even
+**learns its own opener** (no forced turn 1), so it's a *completely rule-free* policy.
 
 ## 1. Why "the info is in the tokens" wasn't enough originally
 
@@ -66,6 +67,16 @@ token-only — already a strong result. Two more steps closed it:
   BC net. It closed the residual (`rajah, witch`) → **100% / 0 losses**.
 
 `99.87 → (feature) → ~99.9 → (raw-GRPO) → 100`.
+
+## 4b. It even learns the opener — no hard-coded turn 1
+
+Every other policy here *forces* the opening to `SLATE` (turn 1 is one deterministic state a net
+under-trains on — one deduplicated example). But that was a behavior-cloning artifact: in RL the
+opening is played in **every** game, so it gets the *most* gradient of any state. Unfreeze it
+(`rl_raw --learn-opener`: sample turn 1, seed the expert's opener in the demo) and the net commits
+to opening **`SLATE` on its own at 0.999** within ~20 updates, still 100% / 0 losses. So the
+solver-free net becomes a **completely rule-free policy**: tokens in, guess out — no candidate set,
+no rail, no forced opener.
 
 ## 5. Honest notes
 

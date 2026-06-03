@@ -158,9 +158,12 @@ the raw policy (`policy_raw.pt`) playing pure argmax. The pattern matrix rebuild
    solver-free **duplicate-letter feature** (`--letter-count`, clears `patty/sushi`), and
    **raw-GRPO** (`rl_raw.py`, closes `rajah/witch`) → **100% raw / 0 losses / 0.5M params**
    (`policy_xattn.pt`), proven token-only, verified on CPU. A naive DAgger round *regressed* it
-   (val-acc rose, play fell) — fixed by selecting on win rate (`train --select-play`). Research
-   variant, not the default. `evaluate_model` chunks the per-word-attention forward; margins are
-   MPS-noisy so verify on CPU.
+   (val-acc rose, play fell) — fixed by selecting on win rate (`train --select-play`). It even
+   **learns its own opener** (`rl_raw --learn-opener`, `config.opener=None`): turn 1 is one
+   under-trained BC example (the net opened `skate`, 92.5%), but in RL it's played every game →
+   most gradient → seed the expert opener and it commits to `SLATE` at 0.999, still 100% — a
+   completely rule-free policy. Research variant, not the default. `evaluate_model` chunks the
+   per-word-attention forward; margins are MPS-noisy so verify on CPU.
 
 The model is essentially a learned ranker over the candidate set; the solver does the exact
 constraint propagation, and the net has learned to *probe* — under the rail (`policy_rl.pt`) or,

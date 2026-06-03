@@ -30,18 +30,30 @@ from .words import load_vocabulary
 
 
 @torch.no_grad()
-def raw_rollouts(model, p, letters, n, answers, opener_idx, device):
-    """One raw (unmasked, sampled-every-turn) game per answer; record every step."""
+def raw_rollouts(model, p, letters, n, answers, opener_idx, device, learn_opener=False):
+    """One raw (unmasked, sampled-every-turn) game per answer; record every step.
+
+    With ``learn_opener`` the opener is *not* forced — turn 1 is sampled like any
+    other move (from the empty state), so the net learns the opening from reward.
+    """
     all_words = np.arange(n)
     ng = len(answers)
-    guesses = [[opener_idx] for _ in range(ng)]
-    codes = [[int(p[opener_idx, answers[i]])] for i in range(ng)]
-    cands = [all_words[p[opener_idx, all_words] == codes[i][0]] for i in range(ng)]
-    solved = [1 if answers[i] == opener_idx else 0 for i in range(ng)]
+    if learn_opener:
+        guesses = [[] for _ in range(ng)]
+        codes = [[] for _ in range(ng)]
+        cands = [all_words.copy() for _ in range(ng)]
+        solved = [0] * ng
+        start_turn = 1
+    else:
+        guesses = [[opener_idx] for _ in range(ng)]
+        codes = [[int(p[opener_idx, answers[i]])] for i in range(ng)]
+        cands = [all_words[p[opener_idx, all_words] == codes[i][0]] for i in range(ng)]
+        solved = [1 if answers[i] == opener_idx else 0 for i in range(ng)]
+        start_turn = 2
     done = [s > 0 for s in solved]
     tok, mask, feat, act, logp, game = [], [], [], [], [], []
 
-    for turn in range(2, MAX_GUESSES + 1):
+    for turn in range(start_turn, MAX_GUESSES + 1):
         active = [i for i in range(ng) if not done[i]]
         if not active:
             break
@@ -66,7 +78,7 @@ def raw_rollouts(model, p, letters, n, answers, opener_idx, device):
     return (tok, mask, feat, act, logp, game), reward
 
 
-def build_batch(model, p, vocab, demos, chosen, group, opener_idx, device):
+def build_batch(model, p, vocab, demos, chosen, group, opener_idx, device, learn_opener=False):
     """Raw rollouts (group-1 per answer) + the full expert demo trajectory, GRPO advantages."""
     letters = vocab.letters
     n = len(vocab)
@@ -74,7 +86,7 @@ def build_batch(model, p, vocab, demos, chosen, group, opener_idx, device):
     answers = np.repeat(chosen, n_sampled)
     slot = np.repeat(np.arange(len(chosen)), n_sampled)
     (s_tok, s_mask, s_feat, s_act, s_logp, s_game), s_reward = raw_rollouts(
-        model, p, letters, n, answers, opener_idx, device)
+        model, p, letters, n, answers, opener_idx, device, learn_opener)
 
     baseline = np.zeros(len(chosen), np.float32)
     for g in range(len(chosen)):
@@ -85,11 +97,16 @@ def build_batch(model, p, vocab, demos, chosen, group, opener_idx, device):
     act, old_logp = list(s_act), list(s_logp)
     adv = [float(s_reward[gi] - baseline[slot[gi]]) for gi in s_game]
 
+    # When learning the opener, the demo trajectory also starts at the empty state
+    # (turn-1 = the expert opener), so the net gets a positive signal to open with it.
+    open_step = (encode_state([], [], letters), candidate_features(np.arange(n), letters), opener_idx, True)
+
     t_tok, t_mask, t_feat, t_act, t_adv = [], [], [], [], []
     for g, answer in enumerate(chosen):
         steps, t_reward = demos[int(answer)]
         a_demo = t_reward - baseline[g]
-        for toks, feats, action, _stuck in steps:  # raw: every expert step, not just stuck ones
+        demo_steps = ([open_step] + list(steps)) if learn_opener else steps
+        for toks, feats, action, _stuck in demo_steps:  # raw: every expert step, not just stuck ones
             padded = pad_to(toks)
             t_tok.append(padded); t_mask.append(padded == TOK_PAD); t_feat.append(feats)
             t_act.append(int(action)); t_adv.append(float(a_demo))
@@ -140,6 +157,8 @@ def main() -> None:
     ap.add_argument("--prio-tau", type=float, default=1.5)
     ap.add_argument("--uniform-mix", type=float, default=0.3)
     ap.add_argument("--eval-every", type=int, default=20)
+    ap.add_argument("--learn-opener", action="store_true",
+                    help="don't force turn 1 — sample + reward it so the net learns the opener (drops config.opener)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="auto")
     args = ap.parse_args()
@@ -152,14 +171,17 @@ def main() -> None:
     n = len(vocab)
 
     model, words = load_checkpoint(args.init, map_location=str(device))
-    opener = getattr(model.config, "opener", None)
-    opener_idx = vocab.index[opener]
+    opener = getattr(model.config, "opener", None) or "slate"
+    opener_idx = vocab.index[opener]  # used to seed demos + anchor regardless of forcing
+    if args.learn_opener:            # stop forcing turn 1; the net learns it from reward
+        model.config.opener = None
     model.to(device).eval()
     ref = copy.deepcopy(model).to(device).eval()
     for pm in ref.parameters():
         pm.requires_grad_(False)
 
-    print(f"device: {device}  opener: {opener.upper()}  (history-only raw-GRPO)")
+    mode = "learn-opener" if args.learn_opener else f"forced {opener.upper()}"
+    print(f"device: {device}  opener: {mode}  (history-only raw-GRPO)")
     demos = precompute_teacher_demos(p, vocab, opener_idx)
     anchor = collect_anchor_states(ref, p, vocab, opener_idx, device, args.anchor_cap, rng)
     print(f"  anchored on {anchor['tokens'].shape[0]} normal states")
@@ -174,7 +196,7 @@ def main() -> None:
 
     for update in range(1, args.updates + 1):
         chosen = rng.choice(n, size=args.answers_per_batch, p=weights, replace=True)
-        batch, s_reward = build_batch(model, p, vocab, demos, chosen, args.group, opener_idx, device)
+        batch, s_reward = build_batch(model, p, vocab, demos, chosen, args.group, opener_idx, device, args.learn_opener)
         if batch is not None:
             last = ppo_update(model, ref, batch, opt, clip=args.clip, kl_coef=args.kl_coef,
                               ent_coef=args.ent_coef, epochs=args.ppo_epochs, mb_size=args.mb_size,
