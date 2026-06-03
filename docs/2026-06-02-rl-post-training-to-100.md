@@ -2,6 +2,8 @@
 
 *Research log — 2026-06-02. Branch `slm-rl-win-rate`. Author: Ihar + Clawd.*
 
+*Part 3 of 3. Previously: [entropy-teacher-and-cloned-policies](2026-06-01-entropy-teacher-and-cloned-policies.md) → [probing-and-openers](2026-06-02-probing-and-openers.md).*
+
 ## TL;DR
 
 The behavior-cloned (BC) Wordle policy was stuck at the candidate-masked ceiling

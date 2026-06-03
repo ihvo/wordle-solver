@@ -1,5 +1,7 @@
 # Research notebook — probing vs. openers (2026-06-02)
 
+*Part 2 of 3. Previously: [entropy-teacher-and-cloned-policies](2026-06-01-entropy-teacher-and-cloned-policies.md). Next: [rl-post-training-to-100](2026-06-02-rl-post-training-to-100.md).*
+
 How we tried to close the behavior-cloned model's gap to the entropy solver, what
 failed, and the one lever that worked. Numbers are measured over all 2315 answers unless
 noted.

@@ -61,6 +61,8 @@ candidate tracking (the rail); the net's own unaided raw play is ~99.3%.
 ## More
 
 Play / train / test commands, the design story, and how to extend it live in
-**[AGENTS.md](AGENTS.md)**. The story of how RL took the net from 99.7% to 100% —
-diagnostics, the recipe, and the dead-ends — is the research log in
-**[docs/](docs/2026-06-02-rl-post-training-to-100.md)**.
+**[AGENTS.md](AGENTS.md)**. The full build is a three-part research log under `docs/`:
+
+1. **[Entropy teacher & cloned policies](docs/2026-06-01-entropy-teacher-and-cloned-policies.md)** — the baseline, the BC transformer, and the perceptron that matched it.
+2. **[Probing vs. openers](docs/2026-06-02-probing-and-openers.md)** — diagnosing the gap, the failed relabel, the SLATE opener.
+3. **[RL post-training to 100%](docs/2026-06-02-rl-post-training-to-100.md)** — teaching the net to probe with RL.
