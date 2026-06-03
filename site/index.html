@@ -19,6 +19,7 @@
     <a class="step" href="#smaller"><span class="dot"></span><span>Shrink it</span></a>
     <a class="step" href="#probing"><span class="dot"></span><span>The trap</span></a>
     <a class="step" href="#rl"><span class="dot"></span><span>RL → 100%</span></a>
+    <a class="step" href="#models"><span class="dot"></span><span>Models</span></a>
     <a class="step" href="#play"><span class="dot"></span><span>Play it</span></a>
   </div>
 </nav>
@@ -292,6 +293,74 @@
         <span><i style="background:var(--gray)"></i>avg guesses (lower is better)</span>
         <span><i style="background:var(--green)"></i>win rate</span>
       </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ===================== MODELS — ARCHITECTURES ===================== -->
+<section id="models">
+  <div class="wrap reveal">
+    <div class="stage-tag">Reference · Architectures</div>
+    <h2>The models, side by side</h2>
+    <p class="lede">Four components appear across the stages: one exact solver, two small networks, and the
+      inference rule that wraps the final one. Here's what each looks like and what it does. All three
+      learned models share the same encoding — a 156-d candidate-set summary and (optionally) a tokenized
+      move history — and emit logits over the 2,315-word vocabulary.</p>
+
+    <!-- Entropy teacher -->
+    <div class="card">
+      <h3 style="margin-top:0">Entropy teacher <span class="mtag">baseline · 0 parameters</span></h3>
+      <div class="diagram" id="archTeacher"></div>
+      <p class="note" style="margin-bottom:0">Not learned — exact information-theoretic search. From the
+        candidate set it reads precomputed feedback patterns (the pattern matrix), forms each guess's feedback
+        histogram over the candidates, and plays the maximum-entropy guess (greatest expected shrinkage of the
+        set). 100% win, 3.50 avg. It's the teacher to imitate, the baseline to beat, and the exact
+        candidate-tracking engine every policy below rides on.</p>
+    </div>
+
+    <!-- Transformer policy (BC + RL) -->
+    <div class="card">
+      <h3 style="margin-top:0">Transformer policy <span class="mtag">behavior-cloned &amp; RL · 1.04M params</span></h3>
+      <div class="diagram" id="archTransformer"></div>
+      <p style="margin-bottom:0">Two input branches. <b>(1) History:</b> the move sequence is tokenized
+        (<code>token = letter×3 + color</code>, ≤26 positions incl. a START), passed through learned token +
+        positional embeddings and a 3-layer Transformer encoder (4 heads, FF 256); the START position is read
+        out as a 128-d summary. <b>(2) Candidate features:</b> the 156-d candidate-set summary through a small
+        MLP to 128-d. The two vectors are concatenated (256-d) and a linear head projects to per-word logits.
+        <b>Behavior cloning</b> trains it on the teacher's moves; the <b>RL</b> stage fine-tunes these <i>same
+        weights</i> on the terminal win reward — architecture unchanged, only the play-time rule differs (the
+        hybrid rail, below).</p>
+    </div>
+
+    <!-- Candidate-only MLP -->
+    <div class="card">
+      <h3 style="margin-top:0">Candidate-only MLP <span class="mtag">ablation · 0.34M params</span></h3>
+      <div class="diagram" id="archMLP"></div>
+      <p style="margin-bottom:0">The Stage-3 ablation: drop the history branch and the Transformer entirely.
+        Just the 156-d candidate features → <code>156→128→128</code> MLP (GELU) → linear head over 2,315 words.
+        About 90% of its 0.34M parameters live in that output head. It plays identically to the Transformer —
+        direct evidence that the candidate set is the sufficient statistic and the policy is really just a
+        <i>ranker</i> over it.</p>
+    </div>
+
+    <!-- Hybrid rail -->
+    <div class="card">
+      <h3 style="margin-top:0">Hybrid rail <span class="mtag">RL inference policy · 0 parameters</span></h3>
+      <div class="diagram" id="archHybrid"></div>
+      <p style="margin-bottom:0">Not a network — the deployment rule that wraps the RL policy. Turn 1 is forced
+        to the fixed opener (SLATE). Otherwise: if <code>candidates ≤ guesses left</code>, mask the logits to
+        candidates and take the best one (enumerating can't lose); if <b>stuck</b> (candidates outnumber the
+        budget), lift the mask and let the net pick over the full pool — a <b>probe</b>. This rail is what lets
+        the learned probing reach 100% while never risking an invalid endgame.</p>
+    </div>
+
+    <div class="diaglegend">
+      <span><i class="in"></i>input / encoding</span>
+      <span><i class="param"></i>learned parameters</span>
+      <span><i class="op"></i>fixed operation</span>
+      <span><i class="out"></i>output</span>
     </div>
   </div>
 </section>

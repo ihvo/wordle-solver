@@ -340,6 +340,89 @@ lineChart($("rlChart"),
 })();
 
 /* ===================================================================== */
+/* ARCHITECTURE DIAGRAMS (inline SVG)                                     */
+/* ===================================================================== */
+(function diagrams() {
+  const FILL = { in: "#eef1f4", param: "#eaf5e6", op: "#ffffff", dec: "#fff7e6", out: "#6aaa64" };
+  const STROKE = { in: "#c3c7cc", param: "#6aaa64", op: "#c3c7cc", dec: "#c9b458", out: "#6aaa64" };
+  const TXT = { in: "#1a1a1b", param: "#1a1a1b", op: "#1a1a1b", dec: "#1a1a1b", out: "#ffffff" };
+  const MONO = "ui-monospace,SFMono-Regular,Menlo,monospace";
+  function box(x, y, w, h, title, sub, kind = "op") {
+    let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="9" fill="${FILL[kind]}" stroke="${STROKE[kind]}" stroke-width="1.5"/>`;
+    const ty = sub ? y + h / 2 - 2 : y + h / 2 + 4;
+    s += `<text x="${x + w / 2}" y="${ty}" text-anchor="middle" style="font-weight:700;font-size:13px;fill:${TXT[kind]}">${title}</text>`;
+    if (sub) s += `<text x="${x + w / 2}" y="${y + h / 2 + 14}" text-anchor="middle" style="font-weight:600;font-size:10.5px;font-family:${MONO};fill:${kind === "out" ? "#eafae6" : "#6b7075"}">${sub}</text>`;
+    return s;
+  }
+  const arrow = (x1, y1, x2, y2, m) => `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#9aa0a6" stroke-width="1.5" marker-end="url(#${m})"/>`;
+  const tag = (x, y, t, c) => `<text x="${x}" y="${y}" text-anchor="middle" style="font-weight:700;font-size:11px;font-family:${MONO};fill:${c || "#6b7075"}">${t}</text>`;
+  const svg = (w, h, m, inner) => `<svg viewBox="0 0 ${w} ${h}" role="img"><defs><marker id="${m}" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9aa0a6"/></marker></defs>${inner}</svg>`;
+  const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
+
+  // Entropy teacher — linear pipeline
+  (function () {
+    const m = "ahE", y = 34, h = 56, w = 152, gap = 176, x0 = 12; let s = "";
+    s += box(x0 + 0 * gap, y, w, h, "Candidate set", "consistent answers", "in");
+    s += box(x0 + 1 * gap, y, w, h, "Pattern matrix", "P[guess, answer]", "op");
+    s += box(x0 + 2 * gap, y, w, h, "Feedback hist.", "per guess", "op");
+    s += box(x0 + 3 * gap, y, w, h, "Entropy → argmax", "max info gain", "op");
+    s += box(x0 + 3 * gap + w + 24, y, 116, h, "guess", "", "out");
+    for (let i = 0; i < 3; i++) s += arrow(x0 + i * gap + w, y + h / 2, x0 + (i + 1) * gap, y + h / 2, m);
+    s += arrow(x0 + 3 * gap + w, y + h / 2, x0 + 3 * gap + w + 24, y + h / 2, m);
+    set("archTeacher", svg(x0 + 3 * gap + w + 24 + 116 + 12, 126, m, s));
+  })();
+
+  // Candidate-only MLP — single row
+  (function () {
+    const m = "ahM", y = 34, h = 56; let s = "";
+    const it = [[12, 152, "Candidate features", "156-d", "in"], [200, 150, "Linear + GELU", "156→128", "param"],
+      [382, 128, "Linear", "128→128", "param"], [542, 152, "Linear head", "128→2315", "param"],
+      [726, 116, "logits", "2,315 words", "out"]];
+    it.forEach(b => { s += box(b[0], y, b[1], h, b[2], b[3], b[4]); });
+    for (let i = 0; i < it.length - 1; i++) s += arrow(it[i][0] + it[i][1], y + h / 2, it[i + 1][0], y + h / 2, m);
+    set("archMLP", svg(726 + 116 + 12, 126, m, s));
+  })();
+
+  // Transformer policy (BC + RL) — two branches merging
+  (function () {
+    const m = "ahT", h = 56, yT = 40, yB = 200; let s = "";
+    s += box(14, yT, 156, h, "History tokens", "(g,fb)×≤5  + START", "in");
+    s += box(196, yT, 196, h, "Transformer encoder", "embed+pos · 3× · 4 heads", "param");
+    s += box(414, yT, 120, h, "[START]", "128-d read-out", "op");
+    s += box(14, yB, 156, h, "Candidate features", "156-d", "in");
+    s += box(196, yB, 196, h, "MLP", "156→128→128, GELU", "param");
+    s += box(566, 118, 108, h, "concat", "256-d", "op");
+    s += box(700, 118, 166, h, "Linear head", "256→2315", "param");
+    s += box(700, yB, 166, 46, "logits → guess", "argmax / mask", "out");
+    s += arrow(170, yT + h / 2, 196, yT + h / 2, m);
+    s += arrow(392, yT + h / 2, 414, yT + h / 2, m);
+    s += arrow(170, yB + h / 2, 196, yB + h / 2, m);
+    s += arrow(534, yT + h / 2, 566, 134, m);
+    s += arrow(392, yB + h / 2, 566, 152, m);
+    s += arrow(674, 118 + h / 2, 700, 118 + h / 2, m);
+    s += arrow(783, 118 + h, 783, yB, m);
+    set("archTransformer", svg(880, 300, m, s));
+  })();
+
+  // Hybrid rail — decision flow
+  (function () {
+    const m = "ahH", h = 54; let s = "";
+    s += box(12, 86, 168, h, "State", "candidates C, left R", "in");
+    s += box(214, 86, 150, h, "C ≤ R ?", "the rail", "dec");
+    s += box(420, 24, 212, h, "mask → best cand.", "argmax over C", "op");
+    s += box(420, 150, 212, h, "unmask → probe", "argmax over full pool", "param");
+    s += box(674, 86, 118, h, "next guess", "", "out");
+    s += arrow(180, 86 + h / 2, 214, 86 + h / 2, m);
+    s += arrow(364, 102, 420, 51, m); s += tag(398, 82, "yes", "#5d9657");
+    s += arrow(364, 126, 420, 177, m); s += tag(398, 150, "no", "#b23b3b");
+    s += arrow(632, 51, 674, 100, m);
+    s += arrow(632, 177, 674, 126, m);
+    s += `<text x="12" y="212" style="font-weight:600;font-size:11px;font-family:${MONO};fill:#6b7075">turn 1 is forced to the fixed opener (SLATE), bypassing the net</text>`;
+    set("archHybrid", svg(804, 230, m, s));
+  })();
+})();
+
+/* ===================================================================== */
 /* PLAY — the agent solves a word, turn by turn                          */
 /* ===================================================================== */
 (function game() {

@@ -181,6 +181,20 @@ table.res tr.win td:first-child { font-weight: 800; }
 .recipe .step p { margin: 0; font-size: 14px; color: #41454a; }
 @media (max-width: 640px){ .recipe { grid-template-columns: 1fr; } .freqgrid{ grid-template-columns: repeat(5,1fr); gap:6px;} .tile{width:46px;height:46px;font-size:22px;} }
 
+/* ---------- architecture diagrams ---------- */
+.diagram { margin: 6px 0 4px; overflow-x: auto; }
+.diagram svg { display: block; min-width: 660px; width: 100%; height: auto; }
+.diagram text { font-family: var(--font); }
+.mtag { font: 700 11px/1 var(--mono); letter-spacing: .04em; color: var(--green-d);
+  background: var(--bg-tint); border: 1px solid #cfe6c8; padding: 4px 8px; border-radius: 999px;
+  vertical-align: middle; margin-left: 8px; white-space: nowrap; }
+.diaglegend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: 10px; }
+.diaglegend i { display: inline-block; width: 13px; height: 13px; border-radius: 4px; vertical-align: -2px; margin-right: 6px; border: 1.5px solid; }
+.diaglegend .in { background: #eef1f4; border-color: #c3c7cc; }
+.diaglegend .param { background: #eaf5e6; border-color: var(--green); }
+.diaglegend .op { background: #fff; border-color: #c3c7cc; }
+.diaglegend .out { background: var(--green); border-color: var(--green); }
+
 /* ---------- charts ---------- */
 .chart { margin-top: 18px; }
 .chart svg { width: 100%; height: auto; overflow: visible; }
