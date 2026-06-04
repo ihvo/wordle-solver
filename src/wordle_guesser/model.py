@@ -36,6 +36,7 @@ class PolicyConfig:
     factored_head: bool = False
     xattn: bool = False  # history-only: words cross-attend the encoded history (no candidate features)
     letter_count: bool = False  # add a per-token "how many of this letter in its guess" embedding (helps duplicates)
+    decoder: bool = False  # generative head: emit the guess letter-by-letter (autoregressive) instead of a classifier
     opener: str | None = None  # fixed turn-1 word; the net can't learn a 1-example opening
 
 
@@ -80,6 +81,56 @@ class CrossAttnWordHead(nn.Module):
         return torch.einsum("nd,bnd->bn", w, ctx) + self.word_bias    # (B, n_words)
 
 
+class LetterDecoder(nn.Module):
+    """Generative head: emit the 5-letter guess autoregressively (a GRU seeded by the
+    state), one letter at a time, instead of a softmax over the word vocabulary. No
+    vocabulary constraint — it can emit any 5-letter string, so it can also emit
+    non-words (the thing we measure)."""
+
+    def __init__(self, d: int, fusion_dim: int):
+        super().__init__()
+        self.state_proj = nn.Linear(fusion_dim, d)
+        self.letter_emb = nn.Embedding(27, d)  # 0..25 = a..z, 26 = BOS
+        self.gru = nn.GRUCell(d, d)
+        self.out = nn.Linear(d, 26)
+
+    def forward(self, z, target=None, sample=False, temp=1.0, generator=None):
+        """z (B, fusion_dim). With ``target`` (B,5) → teacher-forced logits (B,5,26).
+        Without → autoregressive: returns (logits (B,5,26), generated letters (B,5))."""
+        b = z.size(0)
+        h = torch.tanh(self.state_proj(z))
+        prev = torch.full((b,), 26, dtype=torch.long, device=z.device)  # BOS
+        logits, gen = [], []
+        for t in range(WORD_LEN):
+            h = self.gru(self.letter_emb(prev), h)
+            lt = self.out(h)
+            logits.append(lt)
+            if target is not None:
+                prev = target[:, t]                                    # teacher forcing
+            elif sample:
+                prev = torch.multinomial((lt / temp).softmax(-1), 1, generator=generator).squeeze(1)
+                gen.append(prev)
+            else:
+                prev = lt.argmax(-1)
+                gen.append(prev)
+        logits = torch.stack(logits, dim=1)
+        return logits if target is not None else (logits, torch.stack(gen, dim=1))
+
+    def sample(self, z, temp=1.0):
+        """Sample a word autoregressively; return letters (B,5) and per-letter log-probs (B,5)."""
+        b = z.size(0)
+        h = torch.tanh(self.state_proj(z))
+        prev = torch.full((b,), 26, dtype=torch.long, device=z.device)
+        lett, lps = [], []
+        for _t in range(WORD_LEN):
+            h = self.gru(self.letter_emb(prev), h)
+            lp = (self.out(h) / temp).log_softmax(-1)
+            a = torch.multinomial(lp.exp(), 1).squeeze(1)
+            lett.append(a); lps.append(lp.gather(1, a[:, None]).squeeze(1))
+            prev = a
+        return torch.stack(lett, 1), torch.stack(lps, 1)
+
+
 class WordlePolicy(nn.Module):
     """Candidate-feature MLP + optional Transformer-over-history, into a word head."""
 
@@ -119,7 +170,10 @@ class WordlePolicy(nn.Module):
 
         # --- output head ---
         fusion_dim = d * (2 if config.use_history else 1)
-        if config.factored_head:
+        if config.decoder:
+            # generative: emit the guess letter-by-letter from the fused state
+            self.dec = LetterDecoder(d, fusion_dim)
+        elif config.factored_head:
             # Each word is scored by <state, sum of its (position, letter) embeddings>.
             self.letter_emb = nn.Embedding(WORD_LEN * 26, d)
             self.head_proj = nn.Linear(fusion_dim, d)
@@ -154,26 +208,39 @@ class WordlePolicy(nn.Module):
             x = x + self.count_emb(self._letter_counts(tokens))
         return x
 
-    def forward(self, tokens, key_padding_mask, cand_feats) -> torch.Tensor:
-        """tokens (B,L) long; mask (B,L) bool True=pad; cand_feats (B,156) -> (B,n_words).
-
-        In ``xattn`` mode ``cand_feats`` is ignored — the policy reads only the history.
-        """
-        if self.config.xattn:
-            hist = self.encoder(self._embed(tokens), src_key_padding_mask=key_padding_mask)
-            return self.word_head(hist, key_padding_mask)
-
+    def _state(self, tokens, key_padding_mask, cand_feats) -> torch.Tensor:
+        """The fused state vector the head reads (candidate-feature path)."""
         parts = []
         if self.config.use_history:
             x = self.encoder(self._embed(tokens), src_key_padding_mask=key_padding_mask)
             parts.append(self.norm(x[:, 0]))  # START summary
         parts.append(self.cand_proj(cand_feats))
-        z = torch.cat(parts, dim=-1) if len(parts) > 1 else parts[0]
+        return torch.cat(parts, dim=-1) if len(parts) > 1 else parts[0]
 
+    def forward(self, tokens, key_padding_mask, cand_feats, target_letters=None) -> torch.Tensor:
+        """tokens (B,L) long; mask (B,L) bool True=pad; cand_feats (B,156) -> (B,n_words).
+
+        In ``xattn`` mode ``cand_feats`` is ignored — the policy reads only the history.
+        In ``decoder`` mode with ``target_letters`` (B,5) → teacher-forced (B,5,26) logits.
+        """
+        if self.config.xattn:
+            hist = self.encoder(self._embed(tokens), src_key_padding_mask=key_padding_mask)
+            return self.word_head(hist, key_padding_mask)
+
+        z = self._state(tokens, key_padding_mask, cand_feats)
+        if self.config.decoder:
+            return self.dec(z, target=target_letters)  # (B,5,26) teacher-forced
         if self.config.factored_head:
             state = self.head_proj(z)
             return state @ self._word_embeddings().t() + self.word_bias
         return self.head(z)
+
+    @torch.no_grad()
+    def generate(self, tokens, key_padding_mask, cand_feats, sample=False, temp=1.0):
+        """Autoregressively emit the guess letters (B,5) — decoder mode only."""
+        z = self._state(tokens, key_padding_mask, cand_feats)
+        _logits, gen = self.dec(z, target=None, sample=sample, temp=temp)
+        return gen
 
 
 def save_checkpoint(path, model: WordlePolicy, vocab_words: list[str]) -> None:

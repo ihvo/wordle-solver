@@ -164,6 +164,14 @@ the raw policy (`policy_raw.pt`) playing pure argmax. The pattern matrix rebuild
    most gradient → seed the expert opener and it commits to `SLATE` at 0.999, still 100% — a
    completely rule-free policy. Research variant, not the default. `evaluate_model` chunks the
    per-word-attention forward; margins are MPS-noisy so verify on CPU.
+7. **Generative head is the wrong tool for a closed vocab (sidebar).** Replacing the word
+   classifier with a letter-by-letter `LetterDecoder` (`model.py decoder` flag; `decoder.py`
+   BC, `rl_decoder.py` word-level GRPO): teacher-forced BC gets **33% win / 41% invalid words**
+   (emits non-words like `birty`), RL on its own outputs recovers most of the *exposure bias*
+   → **71% / 12% invalid** — but never reaches the classifier's valid-by-construction 100%.
+   For a fixed action set, **rank it, don't generate it**; a decoder only pays off for open
+   vocab (full allowed list), and then you'd trie-constrain it. Not shipped. See memory
+   `generative-head-wrong-for-closed-vocab`.
 
 The model is essentially a learned ranker over the candidate set; the solver does the exact
 constraint propagation, and the net has learned to *probe* — under the rail (`policy_rl.pt`) or,
@@ -178,12 +186,13 @@ with C/R features, on its own (`policy_raw.pt`). See memory notes
 | `feedback.py` | Green/yellow/gray with correct duplicate handling; scalar + vectorized. |
 | `solver.py` | Pattern matrix, vectorized entropy selection, candidate filtering, game env, teacher. |
 | `encoding.py` | `encode_state` + `candidate_features` (156-d; +C/R → 170-d `CAND_DIM_AUG`). |
-| `model.py` | `WordlePolicy` (`use_history`/`factored_head`/`xattn`/`letter_count`) + `CrossAttnWordHead` + save/load. |
+| `model.py` | `WordlePolicy` (`use_history`/`factored_head`/`xattn`/`letter_count`/`decoder`) + `CrossAttnWordHead`/`LetterDecoder` + save/load. |
 | `dataset.py` | Self-play → blended soft-target examples; `--state-aug` for 170-d features. |
 | `train.py` | Soft-CE (BC) loop; `--init` warm-start; `--xattn`/`--letter-count`; `--select-play` (rank on win rate). |
 | `rl.py` | **RL post-training:** GRPO + teacher demos + BC anchor → `policy_rl.pt` (hybrid 100%). |
 | `dagger.py` | **DAgger:** imitate the hybrid expert with C/R features → `policy_raw.pt` (raw 100%). |
 | `rl_raw.py` | **Raw-GRPO** polish for the history-only (`--xattn`) net → solver-free 100%. |
+| `decoder.py` / `rl_decoder.py` | Sidebar: generative letter-decoder head (`decoder` flag) + its RL. Negative result. |
 | `evaluate.py` | Batched full-vocab play; `probe_when_stuck` gives the hybrid; default `policy_raw.pt`. |
 | `policy.py` | Checkpoint → `GameState → guess` wrapper; auto-aug; `probe_when_stuck` rail. |
 | `cli.py` | Interactive solver (default = raw `policy_raw.pt`; `--rl`/`--safe`/`--bc`/`--mlp`). |
