@@ -34,9 +34,10 @@ def _word(letters_row) -> str:
 
 
 @torch.no_grad()
-def rollouts(model, p, vocab, answers, opener_idx, device, temp=1.0):
+def rollouts(model, p, vocab, answers, opener_idx, device, temp=1.0, valid_bonus=0.0):
     """Sample one game per answer; turn 1 forced opener, turns 2+ generated letter-by-letter.
-    A non-word generation ends the game as a loss. Records (state, letters, word-logp) per step."""
+    A non-word generation ends the game as a loss. Records (state, letters, word-logp, valid)
+    per step; reward = win + valid_bonus·(#valid guesses)."""
     letters = vocab.letters
     n = len(vocab)
     all_words = np.arange(n)
@@ -45,8 +46,9 @@ def rollouts(model, p, vocab, answers, opener_idx, device, temp=1.0):
     codes = [[int(p[opener_idx, answers[i]])] for i in range(ng)]
     cands = [all_words[p[opener_idx, all_words] == codes[i][0]] for i in range(ng)]
     solved = [1 if answers[i] == opener_idx else 0 for i in range(ng)]
+    valid_n = [0] * ng
     done = [s > 0 for s in solved]
-    rec_tok, rec_mask, rec_feat, rec_lett, rec_logp, rec_game = [], [], [], [], [], []
+    rec_tok, rec_mask, rec_feat, rec_lett, rec_logp, rec_game, rec_valid = [], [], [], [], [], [], []
 
     for turn in range(2, MAX_GUESSES + 1):
         active = [i for i in range(ng) if not done[i]]
@@ -55,31 +57,34 @@ def rollouts(model, p, vocab, answers, opener_idx, device, temp=1.0):
         tok_arrays = [encode_state(guesses[i], codes[i], letters) for i in active]
         tokens, kpm = pad_batch(tok_arrays)
         feats = np.stack([candidate_features(cands[i], letters) for i in active])
-        z = model._state(torch.from_numpy(tokens).to(device), torch.from_numpy(kpm).to(device),
-                         torch.from_numpy(feats).to(device))
-        gen, lps = model.dec.sample(z, temp=temp)            # (A,5), (A,5)
+        gen, lps = model.decode_sample(torch.from_numpy(tokens).to(device), torch.from_numpy(kpm).to(device),
+                                       torch.from_numpy(feats).to(device), temp=temp)  # (A,5),(A,5)
         gen = gen.cpu().numpy(); wlogp = lps.sum(1).cpu().numpy()
         for row, i in enumerate(active):
-            rec_tok.append(tokens[row].copy()); rec_mask.append(kpm[row].copy()); rec_feat.append(feats[row].copy())
-            rec_lett.append(gen[row].astype(np.int64)); rec_logp.append(float(wlogp[row])); rec_game.append(i)
             idx = vocab.get(_word(gen[row]))
+            rec_tok.append(tokens[row].copy()); rec_mask.append(kpm[row].copy()); rec_feat.append(feats[row].copy())
+            rec_lett.append(gen[row].astype(np.int64)); rec_logp.append(float(wlogp[row]))
+            rec_game.append(i); rec_valid.append(idx is not None)
             if idx is None:                                  # invalid word -> illegal -> lost
                 done[i] = True
                 continue
+            valid_n[i] += 1
             code = int(p[idx, answers[i]])
             guesses[i].append(idx); codes[i].append(code)
             cands[i] = cands[i][p[idx, cands[i]] == code]
             if idx == answers[i]:
                 solved[i] = turn; done[i] = True
-    reward = np.array([reward_for(s) for s in solved], dtype=np.float32)
-    return (rec_tok, rec_mask, rec_feat, rec_lett, rec_logp, rec_game), reward
+    reward = np.array([reward_for(solved[i]) + valid_bonus * valid_n[i] for i in range(ng)], dtype=np.float32)
+    return (rec_tok, rec_mask, rec_feat, rec_lett, rec_logp, rec_game, rec_valid), reward
 
 
-def build_batch(model, p, vocab, chosen, group, opener_idx, device):
+def build_batch(model, p, vocab, chosen, group, opener_idx, device, valid_bonus=0.0):
     n_sampled = group
     answers = np.repeat(chosen, n_sampled)
     slot = np.repeat(np.arange(len(chosen)), n_sampled)
-    (tok, mask, feat, lett, logp, game), reward = rollouts(model, p, vocab, answers, opener_idx, device)
+    (tok, mask, feat, lett, logp, game, valid), reward = rollouts(
+        model, p, vocab, answers, opener_idx, device, valid_bonus=valid_bonus)
+    # GRPO baseline = group mean reward (over the rollouts of that answer)
     baseline = np.zeros(len(chosen), np.float32)
     for g in range(len(chosen)):
         rs = reward[slot == g]
@@ -94,23 +99,25 @@ def build_batch(model, p, vocab, chosen, group, opener_idx, device):
         "letters": torch.from_numpy(np.stack(lett)).to(device),
         "old_logp": torch.tensor(logp, dtype=torch.float32, device=device),
         "adv": torch.tensor(adv, dtype=torch.float32, device=device),
+        "valid": torch.tensor(valid, dtype=torch.bool, device=device),
     }, reward
 
 
-def update(model, ref, batch, opt, clip, kl_coef, ent_coef, epochs, mb_size, max_norm):
+def update(model, ref, batch, opt, clip, kl_coef, ent_coef, epochs, mb_size, max_norm, ul_coef=0.0):
     tokens, mask, feats = batch["tokens"], batch["mask"], batch["feats"]
-    lett, old_logp, adv = batch["letters"], batch["old_logp"], batch["adv"]
+    lett, old_logp, adv, valid = batch["letters"], batch["old_logp"], batch["adv"], batch["valid"]
     adv = adv / (adv.std() + 1e-8)
     with torch.no_grad():
         ref_logp = F.log_softmax(ref(tokens, mask, feats, target_letters=lett).float(), -1)  # (N,5,26)
     n = lett.shape[0]
-    st = {"loss": 0.0, "kl": 0.0, "ent": 0.0, "clipfrac": 0.0, "nb": 0}
+    st = {"loss": 0.0, "kl": 0.0, "ent": 0.0, "ul": 0.0, "clipfrac": 0.0, "nb": 0}
     for _ in range(epochs):
         perm = torch.randperm(n, device=tokens.device)
         for s in range(0, n, mb_size):
             mb = perm[s:s + mb_size]
             logp_full = F.log_softmax(model(tokens[mb], mask[mb], feats[mb], target_letters=lett[mb]).float(), -1)
-            word_logp = logp_full.gather(-1, lett[mb][..., None]).squeeze(-1).sum(1)  # (b,)
+            chosen_lp = logp_full.gather(-1, lett[mb][..., None]).squeeze(-1)  # (b,5)
+            word_logp = chosen_lp.sum(1)
             ratio = torch.exp(word_logp - old_logp[mb])
             a = adv[mb]
             surr = torch.min(ratio * a, torch.clamp(ratio, 1 - clip, 1 + clip) * a).mean()
@@ -118,10 +125,15 @@ def update(model, ref, batch, opt, clip, kl_coef, ent_coef, epochs, mb_size, max
             ent = -(probs * logp_full).sum(-1).mean()
             kl = (probs * (logp_full - ref_logp[mb])).sum(-1).mean()
             loss = -surr + kl_coef * kl - ent_coef * ent
+            ul = torch.zeros((), device=tokens.device)
+            inv = ~valid[mb]
+            if ul_coef > 0 and inv.any():  # push DOWN the letter-probs of generated non-words
+                ul = -(1.0 - chosen_lp[inv].exp() + 1e-6).log().sum(1).mean()
+                loss = loss + ul_coef * ul
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm); opt.step()
             st["loss"] += loss.item(); st["kl"] += kl.item(); st["ent"] += ent.item()
-            st["clipfrac"] += ((ratio - 1).abs() > clip).float().mean().item(); st["nb"] += 1
+            st["ul"] += float(ul.detach()); st["clipfrac"] += ((ratio - 1).abs() > clip).float().mean().item(); st["nb"] += 1
     nb = max(st.pop("nb"), 1)
     return {k: v / nb for k, v in st.items()}
 
@@ -139,6 +151,8 @@ def main() -> None:
     ap.add_argument("--mb-size", type=int, default=1024)
     ap.add_argument("--kl-coef", type=float, default=0.1)
     ap.add_argument("--ent-coef", type=float, default=3e-3)
+    ap.add_argument("--valid-bonus", type=float, default=0.0, help="#5: reward per valid (real-word) guess")
+    ap.add_argument("--unlikelihood", type=float, default=0.0, help="#3: coef pushing down the letter-probs of generated non-words")
     ap.add_argument("--max-norm", type=float, default=1.0)
     ap.add_argument("--prio-tau", type=float, default=2.0)
     ap.add_argument("--uniform-mix", type=float, default=0.3)
@@ -172,11 +186,11 @@ def main() -> None:
 
     for u in range(1, args.updates + 1):
         chosen = rng.choice(n, size=args.answers_per_batch, p=weights, replace=True)
-        batch, s_reward = build_batch(model, p, vocab, chosen, args.group, opener_idx, device)
+        batch, s_reward = build_batch(model, p, vocab, chosen, args.group, opener_idx, device, args.valid_bonus)
         if batch is not None:
             last = update(model, ref, batch, opt, clip=args.clip, kl_coef=args.kl_coef,
                           ent_coef=args.ent_coef, epochs=args.ppo_epochs, mb_size=args.mb_size,
-                          max_norm=args.max_norm)
+                          max_norm=args.max_norm, ul_coef=args.unlikelihood)
         if u % args.eval_every == 0 or u == args.updates:
             m, turns = eval_decoder(model, vocab, p, device)
             weights = answer_weights(turns, args.prio_tau, args.uniform_mix)

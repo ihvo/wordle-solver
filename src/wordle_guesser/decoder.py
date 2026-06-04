@@ -28,7 +28,7 @@ from .words import DATA_DIR, load_vocabulary
 
 
 @torch.no_grad()
-def eval_decoder(model, vocab, p, device, sample=False, max_guesses=MAX_GUESSES):
+def eval_decoder(model, vocab, p, device, sample=False, beam=1, max_guesses=MAX_GUESSES):
     """Play all answers, generating each guess letter-by-letter (unconstrained).
 
     A generated string not in the vocabulary is an *invalid* (illegal) guess → the
@@ -55,8 +55,10 @@ def eval_decoder(model, vocab, p, device, sample=False, max_guesses=MAX_GUESSES)
         if opener_idx is not None and turn == 0:
             chosen = [opener_idx] * len(active)  # opener forced; decoder writes turns 2..6
         else:
-            gen = model.generate(torch.from_numpy(tokens).to(device), torch.from_numpy(kpm).to(device),
-                                 torch.from_numpy(feats).to(device), sample=sample).cpu().numpy()
+            tt, mm, ff = (torch.from_numpy(tokens).to(device), torch.from_numpy(kpm).to(device),
+                          torch.from_numpy(feats).to(device))
+            gen = (model.generate_beam(tt, mm, ff, beam=beam) if beam > 1
+                   else model.generate(tt, mm, ff, sample=sample)).cpu().numpy()
             chosen = []
             for row in gen:
                 gen_total += 1
@@ -92,6 +94,32 @@ def eval_decoder(model, vocab, p, device, sample=False, max_guesses=MAX_GUESSES)
     return summary, turns
 
 
+def lm_pretrain(model, vocab, device, epochs, lr=1e-3, bs=512):
+    """#2: pretrain the decoder as a 5-letter-word language model — generate every real
+    word from a single neutral state — so its prior is 'real words only' before conditioning."""
+    n = len(vocab)
+    letters = vocab.letters
+    tok, kpm = pad_batch([encode_state([], [], letters)])         # neutral: empty history
+    feats = candidate_features(np.arange(n), letters)[None]        # all candidates
+    tok = torch.from_numpy(tok).to(device); kpm = torch.from_numpy(kpm).to(device)
+    feats = torch.from_numpy(feats).to(device)
+    target_all = torch.from_numpy(letters.astype(np.int64)).to(device)  # (N,5)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr)
+    idx = np.arange(n)
+    for ep in range(epochs):
+        np.random.shuffle(idx)
+        tot = 0.0
+        for s in range(0, n, bs):
+            b = idx[s:s + bs]; k = len(b)
+            tl = target_all[b]
+            z = model._state(tok.expand(k, -1), kpm.expand(k, -1), feats.expand(k, -1))
+            logits = model.dec(z, target=tl, marg=model._dec_marg(feats.expand(k, -1)))
+            loss = F.cross_entropy(logits.reshape(-1, 26), tl.reshape(-1))
+            opt.zero_grad(); loss.backward(); opt.step()
+            tot += loss.item() * k
+        print(f"  lm-pretrain epoch {ep+1}/{epochs}  loss {tot/n:.4f}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Train + eval the generative (letter-decoder) head.")
     ap.add_argument("--data", type=Path, default=DATA_DIR / "bc_dataset.npz")
@@ -100,6 +128,8 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--opener", default="slate")
+    ap.add_argument("--marginal", action="store_true", help="#4: feed per-position candidate marginals into the decoder")
+    ap.add_argument("--lm-pretrain", type=int, default=0, help="#2: epochs of word-LM pretraining before BC (0=off)")
     ap.add_argument("--eval-every", type=int, default=3)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="auto")
@@ -119,9 +149,13 @@ def main() -> None:
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True)
 
     cfg = PolicyConfig(n_words=len(vocab), cand_dim=feats.size(1), use_history=True,
-                       decoder=True, opener=args.opener.lower())
+                       decoder=True, decoder_marginal=args.marginal, opener=args.opener.lower())
     model = WordlePolicy(cfg, word_letters=vocab.letters).to(device)
-    print(f"model: {sum(pp.numel() for pp in model.parameters())/1e6:.3f}M params (decoder head)")
+    print(f"model: {sum(pp.numel() for pp in model.parameters())/1e6:.3f}M params (decoder"
+          f"{', marginal' if args.marginal else ''} head)")
+    if args.lm_pretrain:
+        print(f"word-LM pretraining ({args.lm_pretrain} epochs) ...")
+        lm_pretrain(model, vocab, device, args.lm_pretrain)
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)

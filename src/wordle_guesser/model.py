@@ -37,6 +37,7 @@ class PolicyConfig:
     xattn: bool = False  # history-only: words cross-attend the encoded history (no candidate features)
     letter_count: bool = False  # add a per-token "how many of this letter in its guess" embedding (helps duplicates)
     decoder: bool = False  # generative head: emit the guess letter-by-letter (autoregressive) instead of a classifier
+    decoder_marginal: bool = False  # feed per-position candidate letter frequencies into the decoder at each step
     opener: str | None = None  # fixed turn-1 word; the net can't learn a 1-example opening
 
 
@@ -87,43 +88,49 @@ class LetterDecoder(nn.Module):
     vocabulary constraint — it can emit any 5-letter string, so it can also emit
     non-words (the thing we measure)."""
 
-    def __init__(self, d: int, fusion_dim: int):
+    def __init__(self, d: int, fusion_dim: int, use_marginal: bool = False):
         super().__init__()
         self.state_proj = nn.Linear(fusion_dim, d)
         self.letter_emb = nn.Embedding(27, d)  # 0..25 = a..z, 26 = BOS
         self.gru = nn.GRUCell(d, d)
         self.out = nn.Linear(d, 26)
+        self.use_marginal = use_marginal
+        if use_marginal:  # per-position candidate letter frequencies, fed at each step
+            self.marg_proj = nn.Linear(26, d)
 
-    def forward(self, z, target=None, sample=False, temp=1.0, generator=None):
-        """z (B, fusion_dim). With ``target`` (B,5) → teacher-forced logits (B,5,26).
-        Without → autoregressive: returns (logits (B,5,26), generated letters (B,5))."""
+    def _inp(self, prev, marg, t):
+        x = self.letter_emb(prev)
+        if self.use_marginal and marg is not None:
+            x = x + self.marg_proj(marg[:, t])
+        return x
+
+    def forward(self, z, target=None, marg=None, sample=False, temp=1.0):
+        """z (B, fusion_dim); marg (B,5,26) optional per-position candidate marginals.
+        With ``target`` (B,5) → teacher-forced logits (B,5,26); else (logits, letters)."""
         b = z.size(0)
         h = torch.tanh(self.state_proj(z))
         prev = torch.full((b,), 26, dtype=torch.long, device=z.device)  # BOS
         logits, gen = [], []
         for t in range(WORD_LEN):
-            h = self.gru(self.letter_emb(prev), h)
+            h = self.gru(self._inp(prev, marg, t), h)
             lt = self.out(h)
             logits.append(lt)
             if target is not None:
                 prev = target[:, t]                                    # teacher forcing
-            elif sample:
-                prev = torch.multinomial((lt / temp).softmax(-1), 1, generator=generator).squeeze(1)
-                gen.append(prev)
             else:
-                prev = lt.argmax(-1)
+                prev = torch.multinomial((lt / temp).softmax(-1), 1).squeeze(1) if sample else lt.argmax(-1)
                 gen.append(prev)
         logits = torch.stack(logits, dim=1)
         return logits if target is not None else (logits, torch.stack(gen, dim=1))
 
-    def sample(self, z, temp=1.0):
+    def sample(self, z, marg=None, temp=1.0):
         """Sample a word autoregressively; return letters (B,5) and per-letter log-probs (B,5)."""
         b = z.size(0)
         h = torch.tanh(self.state_proj(z))
         prev = torch.full((b,), 26, dtype=torch.long, device=z.device)
         lett, lps = [], []
-        for _t in range(WORD_LEN):
-            h = self.gru(self.letter_emb(prev), h)
+        for t in range(WORD_LEN):
+            h = self.gru(self._inp(prev, marg, t), h)
             lp = (self.out(h) / temp).log_softmax(-1)
             a = torch.multinomial(lp.exp(), 1).squeeze(1)
             lett.append(a); lps.append(lp.gather(1, a[:, None]).squeeze(1))
@@ -172,7 +179,7 @@ class WordlePolicy(nn.Module):
         fusion_dim = d * (2 if config.use_history else 1)
         if config.decoder:
             # generative: emit the guess letter-by-letter from the fused state
-            self.dec = LetterDecoder(d, fusion_dim)
+            self.dec = LetterDecoder(d, fusion_dim, use_marginal=config.decoder_marginal)
         elif config.factored_head:
             # Each word is scored by <state, sum of its (position, letter) embeddings>.
             self.letter_emb = nn.Embedding(WORD_LEN * 26, d)
@@ -229,18 +236,67 @@ class WordlePolicy(nn.Module):
 
         z = self._state(tokens, key_padding_mask, cand_feats)
         if self.config.decoder:
-            return self.dec(z, target=target_letters)  # (B,5,26) teacher-forced
+            return self.dec(z, target=target_letters, marg=self._dec_marg(cand_feats))  # (B,5,26)
         if self.config.factored_head:
             state = self.head_proj(z)
             return state @ self._word_embeddings().t() + self.word_bias
         return self.head(z)
 
+    def _dec_marg(self, cand_feats):
+        """Per-position candidate letter marginals (B,5,26) for the decoder, or None.
+        The first 130 feature dims are exactly the 5×26 per-slot frequencies."""
+        if not self.config.decoder_marginal:
+            return None
+        return cand_feats[:, : WORD_LEN * 26].reshape(-1, WORD_LEN, 26)
+
     @torch.no_grad()
     def generate(self, tokens, key_padding_mask, cand_feats, sample=False, temp=1.0):
         """Autoregressively emit the guess letters (B,5) — decoder mode only."""
         z = self._state(tokens, key_padding_mask, cand_feats)
-        _logits, gen = self.dec(z, target=None, sample=sample, temp=temp)
+        _logits, gen = self.dec(z, target=None, marg=self._dec_marg(cand_feats), sample=sample, temp=temp)
         return gen
+
+    @torch.no_grad()
+    def decode_sample(self, tokens, key_padding_mask, cand_feats, temp=1.0):
+        """Sample a guess letter-by-letter; return letters (B,5) and per-letter logps (B,5)."""
+        z = self._state(tokens, key_padding_mask, cand_feats)
+        return self.dec.sample(z, marg=self._dec_marg(cand_feats), temp=temp)
+
+    @torch.no_grad()
+    def generate_beam(self, tokens, key_padding_mask, cand_feats, beam=8):
+        """Beam search over the decoder (no vocab constraint) — return the highest joint
+        log-prob 5-letter word per game (B,5). Pure better decoding of the model itself."""
+        dec = self.dec
+        z = self._state(tokens, key_padding_mask, cand_feats)
+        marg = self._dec_marg(cand_feats)                                 # (B,5,26) or None
+        b, w, dev = z.size(0), beam, z.device
+
+        def step_inp(prev, t, bw):  # prev (bw,) letters; broadcast marg[:,t] to bw rows
+            x = dec.letter_emb(prev)
+            if dec.use_marginal and marg is not None:
+                mt = marg[:, t][:, None, :].expand(b, bw // b, 26).reshape(bw, 26)
+                x = x + dec.marg_proj(mt)
+            return x
+
+        h = torch.tanh(dec.state_proj(z))                                 # (B,d)
+        prev = torch.full((b,), 26, dtype=torch.long, device=dev)
+        h = dec.gru(step_inp(prev, 0, b), h)
+        lp = dec.out(h).log_softmax(-1)                                   # (B,26)
+        cum, nl = lp.topk(w, dim=-1)                                      # (B,W)
+        seq = nl[..., None]                                              # (B,W,1)
+        beam_h = h[:, None, :].expand(b, w, -1).reshape(b * w, -1).contiguous()
+        prev = nl.reshape(b * w)
+        for t in range(1, WORD_LEN):
+            beam_h = dec.gru(step_inp(prev, t, b * w), beam_h)
+            lp = dec.out(beam_h).log_softmax(-1).reshape(b, w, 26)
+            scores = cum[..., None] + lp                                  # (B,W,26)
+            cum, top = scores.reshape(b, w * 26).topk(w, dim=-1)          # (B,W)
+            src, nl = top // 26, top % 26
+            d = beam_h.size(-1)
+            beam_h = beam_h.reshape(b, w, d).gather(1, src[..., None].expand(b, w, d)).reshape(b * w, d)
+            seq = torch.cat([seq.gather(1, src[..., None].expand(b, w, seq.size(-1))), nl[..., None]], dim=-1)
+            prev = nl.reshape(b * w)
+        return seq[torch.arange(b, device=dev), cum.argmax(-1)]           # (B,5)
 
 
 def save_checkpoint(path, model: WordlePolicy, vocab_words: list[str]) -> None:

@@ -1,10 +1,11 @@
 # A solver-free net: playing from the tokens alone
 
-*Research log — 2026-06-03. Part 5 of 5. Previously:
+*Research log — 2026-06-03. Part 5 of 6. Previously:
 [entropy-teacher-and-cloned-policies](2026-06-01-entropy-teacher-and-cloned-policies.md) →
 [probing-and-openers](2026-06-02-probing-and-openers.md) →
 [rl-post-training-to-100](2026-06-02-rl-post-training-to-100.md) →
-[deprecating-the-rail](2026-06-03-deprecating-the-rail.md).*
+[deprecating-the-rail](2026-06-03-deprecating-the-rail.md). Next:
+[generative-decoder](2026-06-03-generative-decoder.md).*
 
 ## TL;DR
 

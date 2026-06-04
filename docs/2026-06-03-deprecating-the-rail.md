@@ -1,6 +1,6 @@
 # Folding the rail into the net: raw play to 100%
 
-*Research log — 2026-06-03. Part 4 of 5. Previously:
+*Research log — 2026-06-03. Part 4 of 6. Previously:
 [entropy-teacher-and-cloned-policies](2026-06-01-entropy-teacher-and-cloned-policies.md) →
 [probing-and-openers](2026-06-02-probing-and-openers.md) →
 [rl-post-training-to-100](2026-06-02-rl-post-training-to-100.md). Next:

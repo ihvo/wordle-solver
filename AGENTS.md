@@ -164,14 +164,22 @@ the raw policy (`policy_raw.pt`) playing pure argmax. The pattern matrix rebuild
    most gradient → seed the expert opener and it commits to `SLATE` at 0.999, still 100% — a
    completely rule-free policy. Research variant, not the default. `evaluate_model` chunks the
    per-word-attention forward; margins are MPS-noisy so verify on CPU.
-7. **Generative head is the wrong tool for a closed vocab (sidebar).** Replacing the word
-   classifier with a letter-by-letter `LetterDecoder` (`model.py decoder` flag; `decoder.py`
-   BC, `rl_decoder.py` word-level GRPO): teacher-forced BC gets **33% win / 41% invalid words**
-   (emits non-words like `birty`), RL on its own outputs recovers most of the *exposure bias*
-   → **71% / 12% invalid** — but never reaches the classifier's valid-by-construction 100%.
-   For a fixed action set, **rank it, don't generate it**; a decoder only pays off for open
-   vocab (full allowed list), and then you'd trie-constrain it. Not shipped. See memory
-   `generative-head-wrong-for-closed-vocab`.
+7. **A generative decoder reaches 99.44% — once conditioned (next-generation head).** Replacing
+   the word classifier with a letter-by-letter `LetterDecoder` (`model.py decoder`/`decoder_marginal`
+   flags + `generate_beam`; `decoder.py` BC + `--marginal`; `rl_decoder.py` word-level GRPO +
+   `--valid-bonus`): no vocabulary at all, can emit any of 26⁵ strings. Teacher-forced BC gets only
+   **33% win / 41% invalid** (`birty`-style fakes) — looked like the wrong tool. It isn't: that was
+   **exposure bias + missing conditioning**. RL on its own rollouts → 71%/12%; **per-slot
+   candidate-marginal conditioning** (`marg_proj`, feed each step the live letter frequencies — the
+   big lever) → generates toward in-set words; + valid-bonus + more RL → **99.44% win / 0.08%
+   invalid / avg 3.55** (CPU-verified, `models/policy_decoder.pt`, 0.59M params). Competitive with
+   the classifiers. Lessons: (a) condition the generator on the structure of the valid action set
+   and generation nearly matches selection; (b) beam search rescued the weak model (35→45%) but was
+   redundant once confident; (c) the conditioning that fixes validity *suppresses probing*, so it
+   caps at the masked ceiling (13 losses ≈ neighbour-traps, not non-words). LM-prior pretrain and an
+   explicit unlikelihood penalty both *hurt* — conditioning beat them. Research variant (eval via
+   `decoder.eval_decoder`), not wired into the CLI; classifiers/xattn remain the shipped policies.
+   See memory `generative-decoder-closed-vocab`.
 
 The model is essentially a learned ranker over the candidate set; the solver does the exact
 constraint propagation, and the net has learned to *probe* — under the rail (`policy_rl.pt`) or,
@@ -192,7 +200,7 @@ with C/R features, on its own (`policy_raw.pt`). See memory notes
 | `rl.py` | **RL post-training:** GRPO + teacher demos + BC anchor → `policy_rl.pt` (hybrid 100%). |
 | `dagger.py` | **DAgger:** imitate the hybrid expert with C/R features → `policy_raw.pt` (raw 100%). |
 | `rl_raw.py` | **Raw-GRPO** polish for the history-only (`--xattn`) net → solver-free 100%. |
-| `decoder.py` / `rl_decoder.py` | Sidebar: generative letter-decoder head (`decoder` flag) + its RL. Negative result. |
+| `decoder.py` / `rl_decoder.py` | Generative letter-decoder head (`decoder`/`decoder_marginal`) + its RL (`--marginal`, `--valid-bonus`, beam). Reaches 99.44% (`policy_decoder.pt`); not in CLI. |
 | `evaluate.py` | Batched full-vocab play; `probe_when_stuck` gives the hybrid; default `policy_raw.pt`. |
 | `policy.py` | Checkpoint → `GameState → guess` wrapper; auto-aug; `probe_when_stuck` rail. |
 | `cli.py` | Interactive solver (default = raw `policy_raw.pt`; `--rl`/`--safe`/`--bc`/`--mlp`). |

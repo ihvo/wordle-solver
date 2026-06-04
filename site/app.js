@@ -435,6 +435,37 @@ lineChart($("rlChart"),
     s += arrow(608, 104, 636, 104, m);
     set("archXattn", svg(800, 208, m, s));
   })();
+
+  // Generative decoder — emit the word letter-by-letter (no vocabulary)
+  (function () {
+    const m = "ahG"; let s = "";
+    // spine: state z → seed GRU → out → word
+    s += box(12, 140, 132, 52, "State z", "256-d", "in");
+    s += box(172, 140, 124, 52, "state_proj", "256→128", "param");
+    s += box(360, 140, 150, 52, "GRUCell ×5", "128→128", "param");
+    s += box(540, 140, 110, 52, "out", "128→26", "param");
+    s += box(680, 140, 120, 52, "word", "5 letters", "out");
+    // per-step inputs feeding the GRU
+    s += box(300, 14, 104, 44, "prev letter", "from t−1", "in");
+    s += box(420, 14, 104, 44, "letter_emb", "27→128", "param");
+    s += box(300, 72, 104, 44, "marginal", "26-d / slot", "in");
+    s += box(420, 72, 104, 44, "marg_proj", "26→128", "param");
+    // spine arrows
+    s += arrow(144, 166, 172, 166, m);
+    s += arrow(296, 166, 360, 166, m); s += tag(328, 160, "h₀", "#6b7075");
+    s += arrow(510, 166, 540, 166, m);
+    s += arrow(650, 166, 680, 166, m);
+    // input chains
+    s += arrow(404, 36, 420, 36, m);
+    s += arrow(404, 94, 420, 94, m);
+    s += arrow(472, 58, 455, 140, m);
+    s += arrow(472, 116, 465, 140, m);
+    s += tag(492, 132, "+ sum", "#6b7075");
+    // autoregressive feedback: out → prev letter
+    s += `<path d="M595,140 L595,4 L352,4 L352,14" fill="none" stroke="#9aa0a6" stroke-width="1.5" marker-end="url(#${m})"/>`;
+    s += tag(636, 86, "feedback", "#6b7075");
+    set("archDecoder", svg(812, 204, m, s));
+  })();
 })();
 
 /* ===================================================================== */
