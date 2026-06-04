@@ -35,8 +35,9 @@ Same shared front-end as the classifiers, new head.
 
 - **Front-end → state z (256-d).** History tokens (`token = letter×3 + color`, ≤26 positions)
   through learned token + positional embeddings and a **3-layer Transformer encoder** (d=128,
-  4 heads, FF 256, ~397K params); the 170-d candidate features through an MLP to 128-d. Concatenate
-  → a 256-d state `z`.
+  4 heads, FF 256, ~397K params); the 156-d candidate features (130-d per-slot letter frequencies +
+  26-d letter-present frequencies) through an MLP to 128-d. Concatenate → a 256-d state `z`. (Base
+  156-d, *not* the 170-d `+C/R` augmentation the raw classifier uses.)
 - **Decoder head (`LetterDecoder`, ~142K params).** A GRU that writes 5 letters autoregressively:
   - `state_proj` (256→128) turns `z` into the GRU's initial hidden state `h₀`.
   - At each slot `t`, a `GRUCell(128→128)` consumes two inputs, summed: the **previous letter** via

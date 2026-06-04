@@ -539,7 +539,7 @@
         and argmaxes. This one <b>writes the guess letter-by-letter</b> with no vocabulary at all: it can emit any
         of 26⁵ ≈ 12M strings, so nothing structurally stops it from outputting a non-word. The same shared
         front-end produces the state — token+positional embeddings (<code>token = letter×3 + color</code>, ≤26
-        positions), a <b>3-layer Transformer encoder</b> (d=128, 4 heads, FF 256, ~397K params), and the 170-d
+        positions), a <b>3-layer Transformer encoder</b> (d=128, 4 heads, FF 256, ~397K params), and the 156-d
         candidate features through an MLP to 128-d — concatenated into a <b>256-d state z</b>. The selection head
         is gone; in its place a small <b>autoregressive decoder</b> (~142K params).</p>
       <p><b>The decoder head, step by step.</b> <code>state_proj</code> (256→128) turns z into the GRU's initial

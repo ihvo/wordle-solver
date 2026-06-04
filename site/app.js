@@ -444,8 +444,8 @@ lineChart($("rlChart"),
     s += box(14, 20, 148, 44, "History tokens", "(g,fb)×≤5 +START", "in");
     s += box(176, 20, 188, 44, "Transformer enc.", "embed+pos · 3× · 4 heads", "param");
     s += box(378, 20, 92, 44, "[START]", "128-d", "op");
-    s += box(14, 84, 148, 44, "Candidate feats", "170-d (+C/R)", "in");
-    s += box(176, 84, 188, 44, "MLP", "170→128, GELU", "param");
+    s += box(14, 84, 148, 44, "Candidate feats", "156-d", "in");
+    s += box(176, 84, 188, 44, "MLP", "156→128→128, GELU", "param");
     s += box(540, 52, 116, 46, "state z", "concat · 256-d", "op");
     s += arrow(162, 42, 176, 42, m);
     s += arrow(364, 42, 378, 42, m);
