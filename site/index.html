@@ -20,6 +20,7 @@
     <a class="step" href="#probing"><span class="dot"></span><span>The trap</span></a>
     <a class="step" href="#rl"><span class="dot"></span><span>RL → 100%</span></a>
     <a class="step" href="#railfree"><span class="dot"></span><span>Rail-free</span></a>
+    <a class="step" href="#solverfree"><span class="dot"></span><span>Solver-free</span></a>
     <a class="step" href="#decoder"><span class="dot"></span><span>Generate it</span></a>
     <a class="step" href="#models"><span class="dot"></span><span>Models</span></a>
     <a class="step" href="#play"><span class="dot"></span><span>Play it</span></a>
@@ -351,10 +352,61 @@
 
 <div class="divider"></div>
 
-<!-- ===================== STAGE 7 — GENERATIVE DECODER ===================== -->
+<!-- ===================== STAGE 7 — SOLVER-FREE NET ===================== -->
+<section id="solverfree">
+  <div class="wrap reveal">
+    <div class="stage-tag">Stage 7 · Dropping the solver</div>
+    <h2>Playing from the tokens alone</h2>
+    <p class="lede">Every policy so far is handed a <b>candidate-set summary</b> that an exact solver
+      recomputes each turn. But the candidate set is a deterministic function of the
+      <code>(guess, feedback)</code> history — the information is <i>already in the tokens</i>. So can the net
+      drop the solver's tracking entirely and play from the raw history? <b>Yes — and perfectly.</b></p>
+
+    <div class="eli5">
+      <b>Why it didn't work at first.</b> A history-only transformer that reads the move sequence into one
+      summary vector and projects to 2,315 words learns essentially <b>nothing</b> (~random, 4.06 avg). Two walls:
+      a single 128-d vector can't represent an arbitrary subset of up to 2,315 still-consistent words (the
+      <b>readout bottleneck</b>), and candidacy is a brittle discrete filter with duplicate-letter handling
+      where one letter flips the answer.
+    </div>
+
+    <div class="card">
+      <p style="margin-top:0"><b>The fix: a per-word × history readout.</b> Give each word a way to check itself
+        against the <i>specific</i> history. Embed every vocabulary word from its letters, let it
+        <b>cross-attend the encoded history tokens</b> (the keys/values), and score it against its own attended
+        context → a per-word logit. We drop <code>candidate_features</code> <b>entirely</b> and feed only tokens.
+        Three fixes closed the gap:</p>
+      <table class="res">
+        <thead><tr><th>History-only net (reads only the tokens)</th><th>Win</th><th>Avg</th><th>Losses</th></tr></thead>
+        <tbody>
+          <tr><td>Single-vector readout → Linear (BC)</td><td class="num">~random</td><td class="num">4.06</td><td class="num">—</td></tr>
+          <tr><td>+ cross-attention readout (BC/DAgger)</td><td class="num">99.87%</td><td class="num">—</td><td class="num">3</td></tr>
+          <tr class="win"><td>+ duplicate-letter feature + raw-GRPO <span class="badge">research variant</span></td><td class="num">100.0%</td><td class="num">3.464</td><td class="num">0</td></tr>
+        </tbody>
+      </table>
+      <p class="note" style="margin-bottom:0">Token-only is <b>proven</b>: feeding random vs. zero features (even
+        different dims) gives identical logits — the head ignores them; the decision is the history alone. No
+        candidate set is ever computed for the policy.</p>
+    </div>
+
+    <div class="eli5">
+      <b>It even learns its own opener.</b> Turn 1 used to be hard-coded — one deterministic state a net
+      under-trains on. But played in <i>every</i> RL game it gets the most gradient of any state: given the chance,
+      the net commits to opening <code>SLATE</code> on its own (0.999 confidence, within ~20 updates) and still
+      solves all 2,315 — a <b>completely rule-free policy</b>: tokens in, guess out, no solver, no rail, no forced
+      opener. <b>One real trap on the way:</b> a naive DAgger round <i>regressed</i> it (99.87 → 99.22) while
+      val-accuracy <i>rose</i> — the fix that mattered was selecting on raw <b>win rate</b>, not imitation loss.
+      Research variant; the shipped default stays <code>policy_raw.pt</code>.
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ===================== STAGE 8 — GENERATIVE DECODER ===================== -->
 <section id="decoder">
   <div class="wrap reveal">
-    <div class="stage-tag">Stage 7 · Writing the word</div>
+    <div class="stage-tag">Stage 8 · Writing the word</div>
     <h2>Generating, not choosing</h2>
     <p class="lede">Every policy so far is a <b>classifier</b>: it scores all 2,315 answer words and takes
       the argmax — a wrong "word" is impossible by construction. The next generation asks the opposite
@@ -465,7 +517,7 @@
     <div class="card">
       <h3 style="margin-top:0">History-only net <span class="mtag">no solver, no rules · 0.5M params</span></h3>
       <div class="diagram" id="archXattn"></div>
-      <p>The experiment from the <i>Rail-free</i> follow-up taken to its limit: drop the candidate features
+      <p>The architecture behind the <i>Solver-free</i> stage: drop the candidate features
         <b>entirely</b> and read only the move history. The catch is the readout — a single summary vector can't
         say which of 2,315 words are still consistent. So each word (embedded from its letters) is the <b>query</b>
         in a <b>cross-attention</b> over the encoded history (the keys/values), and is scored against its own
