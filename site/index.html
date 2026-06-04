@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wordle-Guesser — a small policy from 99.4% to 100%</title>
-<meta name="description" content="How a 1M-parameter network learned to play Wordle perfectly — an entropy solver, behavior cloning, reinforcement learning that taught it to probe, and DAgger that folded the endgame rule into the weights for raw 100% play. Interactive, with a playable agent.">
+<meta name="description" content="How a 1M-parameter network learned to play Wordle perfectly — an entropy solver, behavior cloning, reinforcement learning that taught it to probe, and DAgger that folded the endgame rule into the weights for raw 100% play. Interactive, stage by stage.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -23,7 +23,6 @@
     <a class="step" href="#solverfree"><span class="dot"></span><span>Solver-free</span></a>
     <a class="step" href="#decoder"><span class="dot"></span><span>Generate it</span></a>
     <a class="step" href="#models"><span class="dot"></span><span>Models</span></a>
-    <a class="step" href="#play"><span class="dot"></span><span>Play it</span></a>
   </div>
 </nav>
 
@@ -569,44 +568,11 @@
   </div>
 </section>
 
-<div class="divider"></div>
-
-<!-- ===================== PLAY — THE AGENT SOLVES ===================== -->
-<section id="play">
-  <div class="wrap reveal">
-    <div class="stage-tag">The payoff · Watch it play</div>
-    <h2>Run the policy on any word</h2>
-    <p class="lede">Pick an answer (or pull a hard one) and step the finished policy through it. It opens
-      <code>SLATE</code>, tracks the candidate set, and — when the survivors no longer fit the budget —
-      <b>probes</b>. The full pipeline in motion.</p>
-
-    <div class="card">
-      <div class="controls">
-        <label class="fld">answer <input type="text" id="gAnswer" maxlength="5" value="pound"></label>
-        <button class="btn" id="gStep">step</button>
-        <button class="btn ghost" id="gAuto">auto-solve</button>
-        <button class="btn ghost" id="gRandom">random answer</button>
-        <button class="btn ghost" id="gTrap">hard one</button>
-        <button class="btn ghost" id="gReset">reset</button>
-      </div>
-      <div id="gBoard" style="margin:18px 0"></div>
-      <p id="gStatus" class="note" style="margin:0; min-height:1.5em"></p>
-      <div class="eli5" id="gExplain" style="margin-bottom:0">Press <b>step</b> to start. Each move is
-        annotated — narrowing (best candidate) or a probe (non-candidate, played to split a tied set).</div>
-    </div>
-    <p class="note" style="margin-top:14px">This plays the <b>same endgame strategy the shipped policy learned</b>
-      — best candidate while survivors fit the budget, otherwise the max-entropy probe over the full pool. The
-      shipped net (<code>policy_raw.pt</code>) does this <b>raw</b>, with no inference-time rail; this JS twin
-      computes the identical decision (greedy entropy), so it runs instantly with no weights to download.
-      Verified: <b>100% / 0 losses</b> over all 2,315, in-browser.</p>
-  </div>
-</section>
-
 <!-- ===================== FOOTER ===================== -->
 <footer>
   <div class="wrap reveal">
     <h3>The full research log</h3>
-    <p class="note" style="margin-top:0">This walkthrough condenses a four-part lab notebook with the real
+    <p class="note" style="margin-top:0">This walkthrough condenses a six-part lab notebook with the real
       numbers, code, and dead-ends.</p>
     <div class="linklist">
       <a href="https://github.com/ihvo/wordle-solver">› Code on GitHub (ihvo/wordle-solver)</a>
@@ -614,6 +580,8 @@
       <a href="https://github.com/ihvo/wordle-solver/blob/main/docs/2026-06-02-probing-and-openers.md">› Part 2 — probing &amp; openers</a>
       <a href="https://github.com/ihvo/wordle-solver/blob/main/docs/2026-06-02-rl-post-training-to-100.md">› Part 3 — reinforcement learning to 100%</a>
       <a href="https://github.com/ihvo/wordle-solver/blob/main/docs/2026-06-03-deprecating-the-rail.md">› Part 4 — folding the rail into the net</a>
+      <a href="https://github.com/ihvo/wordle-solver/blob/main/docs/2026-06-03-solver-free-net.md">› Part 5 — a solver-free net</a>
+      <a href="https://github.com/ihvo/wordle-solver/blob/main/docs/2026-06-03-generative-decoder.md">› Part 6 — the generative decoder</a>
     </div>
     <p class="foot-note">The candidate counts and letter marginals above are computed live from the real 2,315-word
       answer list embedded in the page. No tracking, no build step — one folder of HTML/CSS/JS.</p>
