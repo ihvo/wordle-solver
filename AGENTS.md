@@ -190,10 +190,25 @@ the raw policy (`policy_raw.pt`) playing pure argmax. The pattern matrix rebuild
    Diagnosis method: read `trainCE` vs **teacher-forced val CE** (no gap → not capacity) and
    **TF exact-word accuracy** (read-out limit, isolated from exposure bias) — `decoder.py
    --val-frac`. The wall that doesn't move: soft validity has a floor (~22% invalid; only a trie
-   zeroes it) and **per-slot conditioning ≠ per-word candacy** (the marginal is identical for
+   zeroes it) and **per-slot conditioning ≠ per-word candidacy** (the marginal is identical for
    candidate sets needing different guesses). For 99% from tokens use the **cross-attn classifier**
    (`policy_xattn.pt`, 100%); a generator hits 99% only by containing a classifier. Research
    variant, nothing shipped. See memory `generative-from-tokens-caps-low`.
+9. **Word-seed decoder: a generative transformer to 95% from tokens (broke finding #8's "ceiling").**
+   Finding #8's 43% wasn't a real ceiling — a generator *can* do per-word candidacy if it attends the
+   vocabulary instead of reconstructing a per-slot marginal. Architecture (`decoder_word_seed`):
+   history → encoder → **`CrossAttnWordHead`** scores all 2,315 words → **straight-through hard pick**
+   (`decoder_word_seed_hard`) seeds the GRU with *one* word's embedding → it **spells the characters**
+   (+ token-derived `decoder_hard_mask`). Trained: spelling CE + word-classification aux, then gentle
+   KL-anchored RL. Ladder: 51% → soft-seed BC 70%/RL 87% → **hard-seed BC 93.9% → +gentle RL 95.08% /
+   3.54 / 1.8% invalid** (`models/policy_word_seed.pt`, 0.69M, history-only). The soft→hard seed is
+   the big jump (spelling one clean word ≫ decoding a blend). **Did not reach 99%:** the head plateaus
+   ~95% (encoder shared with the speller) and RL through the straight-through seed is noisy
+   (oscillates). What failed to close it: naive RL (regressed), frozen-classifier-head + fresh decoder
+   (frozen encoder starves the decoder xattn), warm-start joint (slow fresh decoder), KD from the
+   classifier (head↔decoder embedding coupling destabilizes). The plain **classifier still wins
+   outright (100%/3.46)** — the character-output constraint costs the last points; 99% generatively is
+   an RL/distillation-infra effort, not an architecture one. See memory `word-seed-decoder-95`.
 
 The model is essentially a learned ranker over the candidate set; the solver does the exact
 constraint propagation, and the net has learned to *probe* — under the rail (`policy_rl.pt`) or,
@@ -214,7 +229,7 @@ with C/R features, on its own (`policy_raw.pt`). See memory notes
 | `rl.py` | **RL post-training:** GRPO + teacher demos + BC anchor → `policy_rl.pt` (hybrid 100%). |
 | `dagger.py` | **DAgger:** imitate the hybrid expert with C/R features → `policy_raw.pt` (raw 100%). |
 | `rl_raw.py` | **Raw-GRPO** polish for the history-only (`--xattn`) net → solver-free 100%. |
-| `decoder.py` / `rl_decoder.py` | Generative letter-decoder head + its RL. Candidate-fed: `--marginal`/`--valid-bonus`/beam → 99.44% (`policy_decoder.pt`). Tokens-only study: `--history-only`/`--xattn`/`--learned-marginal`/`--marg-attn`/`--word-lm` + `--val-frac` diagnostics → caps ~43% (finding #8). Not in CLI. |
+| `decoder.py` / `rl_decoder.py` | Generative letter-decoder head + its RL. Candidate-fed: `--marginal`/`--valid-bonus`/beam → 99.44% (`policy_decoder.pt`). Tokens-only: `--history-only`/`--xattn`/`--learned-marginal`/`--marg-attn`/`--word-lm`/`--constraints`/`--hard-mask` → ~43–51% (finding #8). Word-seed: `--word-seed[-hard]` (+`--init`/`--freeze-encoder`/`--init-lr-scale`/`--kd-teacher`) → 95% (finding #9, `policy_word_seed.pt`). `--val-frac` = TF-eval diagnostics. Not in CLI. |
 | `evaluate.py` | Batched full-vocab play; `probe_when_stuck` gives the hybrid; default `policy_raw.pt`. |
 | `policy.py` | Checkpoint → `GameState → guess` wrapper; auto-aug; `probe_when_stuck` rail. |
 | `cli.py` | Interactive solver (default = raw `policy_raw.pt`; `--rl`/`--safe`/`--bc`/`--mlp`). |

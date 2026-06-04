@@ -1,6 +1,6 @@
 # The next generation: a generative decoder that *writes* the word
 
-*Research log — 2026-06-03. Author: Ihar + Clawd. Part 6 of 7. Previously:
+*Research log — 2026-06-03. Author: Ihar + Clawd. Part 6 of 8. Previously:
 [entropy-teacher-and-cloned-policies](2026-06-01-entropy-teacher-and-cloned-policies.md) →
 [probing-and-openers](2026-06-02-probing-and-openers.md) →
 [rl-post-training-to-100](2026-06-02-rl-post-training-to-100.md) →

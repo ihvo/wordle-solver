@@ -178,11 +178,22 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--opener", default="slate")
+    ap.add_argument("--init", type=Path, default=None, help="warm-start the model weights from a checkpoint (matching submodules, strict=False)")
+    ap.add_argument("--letter-count", action="store_true", help="add the per-token letter-count embedding (match a letter_count encoder, e.g. policy_xattn)")
+    ap.add_argument("--freeze-encoder", action="store_true", help="freeze everything except the decoder (dec.*) — train only the spelling decoder on a warm-started head")
+    ap.add_argument("--init-lr-scale", type=float, default=1.0, help="lr multiplier for warm-started (non-dec) params — <1 fine-tunes the head/encoder gently while the fresh decoder learns fast")
+    ap.add_argument("--kd-teacher", type=Path, default=None, help="distill the word head toward this classifier's candidacy distribution (e.g. policy_xattn)")
+    ap.add_argument("--kd-coef", type=float, default=1.0, help="weight of the KD loss on the word-head logits")
+    ap.add_argument("--kd-temp", type=float, default=2.0, help="KD softmax temperature")
     ap.add_argument("--marginal", action="store_true", help="#4: feed per-position candidate marginals into the decoder")
     ap.add_argument("--history-only", action="store_true", help="drop the candidate-feature MLP: state = encoder read-out only (solver-free)")
     ap.add_argument("--xattn", action="store_true", help="decoder cross-attends the encoded history each step (reads full sequence, not a pooled seed)")
     ap.add_argument("--learned-marginal", action="store_true", help="B: predict the candidate marginal from the encoder (aux-supervised) and feed it to the decoder (solver-free)")
     ap.add_argument("--marg-attn", action="store_true", help="B2: predict the marginal with per-slot queries cross-attending the history (not the pooled seed)")
+    ap.add_argument("--constraints", action="store_true", help="feed an exact green/yellow/gray constraint mask parsed from tokens (solver-free) as the decoder's marginal")
+    ap.add_argument("--hard-mask", action="store_true", help="hard-mask per-position output logits to the token-parsed allowed letters (guarantees feedback-consistent guesses)")
+    ap.add_argument("--word-seed", action="store_true", help="seed the decoder with a cross-attention word head's soft-selected word embedding (per-word candidacy); + word-classification aux loss")
+    ap.add_argument("--word-seed-hard", action="store_true", help="straight-through: seed = the argmax word's embedding (clean single word, no blend)")
     ap.add_argument("--aux-coef", type=float, default=1.0, help="weight of the marginal-prediction auxiliary loss")
     ap.add_argument("--word-lm", action="store_true", help="#2: mix a learned 5-letter word-LM prior into generation (product of experts; parametric, no trie)")
     ap.add_argument("--word-lm-alpha", type=float, default=1.0, help="weight of the word-LM logits in the product of experts")
@@ -206,9 +217,11 @@ def main() -> None:
         ap.error("--learned-marginal is incompatible with --marginal (pick predicted or solver marginal)")
     if args.marg_attn and not args.learned_marginal:
         ap.error("--marg-attn only applies with --learned-marginal")
+    if args.constraints and (args.marginal or args.learned_marginal):
+        ap.error("--constraints is its own marginal source (drop --marginal/--learned-marginal)")
 
     tokens, mask, feats, tgt_idx, _tw = load_dataset(args.data)
-    target_word = tgt_idx[:, 0]                                   # best-candidate target
+    target_word = tgt_idx[:, 0].long()                            # best-candidate target (word index)
     target_letters = torch.from_numpy(vocab.letters[target_word.numpy()].astype(np.int64))  # (M,5)
     print(f"dataset: {tokens.size(0)} states, feat dim {feats.size(1)}")
 
@@ -220,10 +233,11 @@ def main() -> None:
         n_val = int(tokens.size(0) * args.val_frac)
         vi, ti = perm[:n_val], perm[n_val:]
         val = (tokens[vi], mask[vi], feats[vi], target_letters[vi])
-        tokens, mask, feats, target_letters = tokens[ti], mask[ti], feats[ti], target_letters[ti]
+        tokens, mask, feats, target_letters, target_word = (
+            tokens[ti], mask[ti], feats[ti], target_letters[ti], target_word[ti])
         print(f"split: {tokens.size(0)} train / {n_val} val")
 
-    ds = TensorDataset(tokens, mask, feats, target_letters)
+    ds = TensorDataset(tokens, mask, feats, target_letters, target_word)
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True)
 
     cfg = PolicyConfig(n_words=len(vocab), cand_dim=feats.size(1), use_history=True,
@@ -231,8 +245,23 @@ def main() -> None:
                        decoder=True, decoder_marginal=args.marginal, decoder_xattn=args.xattn,
                        decoder_learned_marginal=args.learned_marginal, decoder_marg_attn=args.marg_attn,
                        decoder_word_lm=args.word_lm, decoder_word_lm_alpha=args.word_lm_alpha,
+                       decoder_constraints=args.constraints, decoder_hard_mask=args.hard_mask,
+                       decoder_word_seed=args.word_seed or args.word_seed_hard,
+                       decoder_word_seed_hard=args.word_seed_hard, letter_count=args.letter_count,
                        opener=args.opener.lower())
     model = WordlePolicy(cfg, word_letters=vocab.letters).to(device)
+    if args.init:
+        from .model import load_checkpoint
+        src, _ = load_checkpoint(args.init, map_location=str(device))
+        missing, unexpected = model.load_state_dict(src.state_dict(), strict=False)
+        copied = [k for k in src.state_dict() if k not in unexpected]
+        print(f"warm-started from {args.init}: copied {len(copied)} tensors "
+              f"(encoder/word_head if present); fresh decoder")
+    if args.freeze_encoder:  # train only the spelling decoder on a warm-started head
+        for name, param in model.named_parameters():
+            param.requires_grad_(name.startswith("dec."))
+        ntrain = sum(q.numel() for q in model.parameters() if q.requires_grad)
+        print(f"froze all but dec.* — training {ntrain/1e6:.3f}M params")
     parts = ["decoder"]
     if args.history_only:
         parts.append("history-only")
@@ -240,6 +269,12 @@ def main() -> None:
         parts.append("xattn")
     if args.learned_marginal:
         parts.append("learned-marg" + ("(attn)" if args.marg_attn else ""))
+    if args.constraints:
+        parts.append("constraints")
+    if args.hard_mask:
+        parts.append("hard-mask")
+    if args.word_seed or args.word_seed_hard:
+        parts.append("word-seed" + ("(hard)" if args.word_seed_hard else ""))
     if args.marginal:
         parts.append("marginal")
     if args.word_lm:
@@ -252,8 +287,23 @@ def main() -> None:
         print(f"word-LM branch pretraining ({args.word_lm_pretrain} epochs) ...")
         word_lm_pretrain(model, vocab, device, args.word_lm_pretrain)
     all_letters = torch.from_numpy(vocab.letters.astype(np.int64)).to(device) if args.word_lm else None
+    teacher = None
+    if args.kd_teacher:
+        from .model import load_checkpoint
+        teacher, _ = load_checkpoint(args.kd_teacher, map_location=str(device))
+        teacher.to(device).eval()
+        for tp in teacher.parameters():
+            tp.requires_grad_(False)
+        print(f"KD teacher: {args.kd_teacher} (coef {args.kd_coef}, temp {args.kd_temp})")
 
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    if args.init and args.init_lr_scale != 1.0:  # gentle lr for warm-started (non-dec) params
+        dec_p = [q for n, q in model.named_parameters() if q.requires_grad and n.startswith("dec.")]
+        warm_p = [q for n, q in model.named_parameters() if q.requires_grad and not n.startswith("dec.")]
+        opt = torch.optim.AdamW([{"params": dec_p, "lr": args.lr},
+                                 {"params": warm_p, "lr": args.lr * args.init_lr_scale}], weight_decay=1e-4)
+        print(f"differential lr: dec {args.lr}, warm-started {args.lr * args.init_lr_scale}")
+    else:
+        opt = torch.optim.AdamW([q for q in model.parameters() if q.requires_grad], lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
     best_key = (-1.0, 0.0)
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -261,14 +311,27 @@ def main() -> None:
     for epoch in range(1, args.epochs + 1):
         model.train()
         running = 0.0
-        for tok, msk, ft, tl in tqdm(loader, desc=f"epoch {epoch}/{args.epochs}", leave=False):
-            tok, msk, ft, tl = tok.to(device), msk.to(device), ft.to(device), tl.to(device)
+        for tok, msk, ft, tl, tw in tqdm(loader, desc=f"epoch {epoch}/{args.epochs}", leave=False):
+            tok, msk, ft, tl, tw = (tok.to(device), msk.to(device), ft.to(device),
+                                    tl.to(device), tw.to(device))
             if args.learned_marginal:
                 logits, marg_logits = model(tok, msk, ft, target_letters=tl, return_aux=True)
                 dec_loss = F.cross_entropy(logits.reshape(-1, 26), tl.reshape(-1))
                 true_marg = ft[:, : WORD_LEN * 26].reshape(-1, WORD_LEN, 26)  # solver marginal target
                 marg_loss = -(true_marg * F.log_softmax(marg_logits, dim=-1)).sum(-1).mean()
                 loss = dec_loss + args.aux_coef * marg_loss
+            elif args.word_seed or args.word_seed_hard:
+                logits, word_logits = model(tok, msk, ft, target_letters=tl, return_aux=True)
+                dec_loss = F.cross_entropy(logits.reshape(-1, 26), tl.reshape(-1))
+                word_loss = F.cross_entropy(word_logits, tw)         # learn per-word candidacy
+                loss = dec_loss + args.aux_coef * word_loss
+                if teacher is not None:                              # distill classifier candidacy
+                    with torch.no_grad():
+                        t_logits = teacher(tok, msk, ft)
+                    T = args.kd_temp
+                    kd = F.kl_div(F.log_softmax(word_logits / T, -1),
+                                  F.softmax(t_logits / T, -1), reduction="batchmean") * (T * T)
+                    loss = loss + args.kd_coef * kd
             else:
                 logits = model(tok, msk, ft, target_letters=tl)     # (B,5,26) teacher-forced
                 loss = F.cross_entropy(logits.reshape(-1, 26), tl.reshape(-1))

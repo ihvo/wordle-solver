@@ -1,12 +1,13 @@
 # Generation from tokens alone: mapping the ceiling
 
-*Research log — 2026-06-03. Author: Ihar + Clawd. Part 7 of 7. Previously:
+*Research log — 2026-06-03. Author: Ihar + Clawd. Part 7 of 8. Previously:
 [entropy-teacher-and-cloned-policies](2026-06-01-entropy-teacher-and-cloned-policies.md) →
 [probing-and-openers](2026-06-02-probing-and-openers.md) →
 [rl-post-training-to-100](2026-06-02-rl-post-training-to-100.md) →
 [deprecating-the-rail](2026-06-03-deprecating-the-rail.md) →
 [solver-free-net](2026-06-03-solver-free-net.md) →
-[generative-decoder](2026-06-03-generative-decoder.md).*
+[generative-decoder](2026-06-03-generative-decoder.md). Next:
+[word-seed-decoder](2026-06-04-word-seed-decoder.md).*
 
 ## TL;DR
 

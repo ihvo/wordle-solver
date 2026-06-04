@@ -1,7 +1,7 @@
 # Research log
 
 How wordle-guesser went from an entropy solver to a 100%-win neural policy — and then dropped the
-solver and the vocabulary entirely. Seven parts, read in order:
+solver and the vocabulary entirely. Eight parts, read in order:
 
 1. **[Entropy teacher & cloned policies](2026-06-01-entropy-teacher-and-cloned-policies.md)**
    — the origin: a 3.50 solver, behavior-cloned into a 1.04M transformer and a 0.34M
@@ -21,7 +21,10 @@ solver and the vocabulary entirely. Seven parts, read in order:
    conditioning + RL takes it from 33% to **99.44% / 0.08% non-words**.
 7. **[Generation from tokens alone](2026-06-03-generative-from-tokens.md)** — the hard combination:
    no candidate features *and* no vocabulary. Cross-attn → learned marginal → word-LM climbs
-   11% → **43%**, then hits a structural wall: a generator can't do per-word candidacy. Maps the
-   ceiling; the classifier remains the way to 100% from tokens.
+   11% → **43%** and *looks* capped — a generator can't do per-word candidacy via a per-slot marginal.
+8. **[The word-seed decoder](2026-06-04-word-seed-decoder.md)** — break that ceiling: give the
+   generator per-word candidacy (a cross-attention word head) and have it *spell* the selected word
+   as characters. A straight-through hard seed takes a generative, history-in/characters-out
+   transformer to **95.08% / 3.54** — within five points of the selection classifier.
 
 Operational guide (how to build/train/run): [`../AGENTS.md`](../AGENTS.md).

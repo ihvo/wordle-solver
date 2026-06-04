@@ -559,6 +559,32 @@
         the masked ceiling — the last ~0.5% is the neighbour-traps, not non-words.</p>
     </div>
 
+    <!-- Word-seed decoder -->
+    <div class="card">
+      <h3 style="margin-top:0">Word-seed decoder <span class="mtag">generative, from tokens · 0.69M params</span></h3>
+      <div class="diagram" id="archWordSeed"></div>
+      <p>The hardest version of the brief: a transformer that reads <b>only the move history</b> (no candidate
+        features) and <b>outputs the next word as characters</b> (no vocabulary at the output). A pure
+        letter-generator from tokens stalls around 50% — a per-slot statistic can't tell you <i>which specific
+        word</i> to play. The fix is to give the generator <b>per-word candidacy</b> the same way the 100%
+        classifier gets it, then have it <i>spell</i> the chosen word.</p>
+      <p><b>How it works.</b> The history goes through the <b>3-layer Transformer encoder</b>; a
+        <b>cross-attention word head</b> scores all 2,315 words against it (each word, embedded from its letters,
+        attends the encoded history) → per-word logits. We take the <b>top word</b> via a <b>straight-through
+        hard pick</b> (forward: that one word's embedding as a clean <i>seed</i>; backward: the softmax gradient,
+        so the head still learns) — crucially <i>one</i> word, not a softmax blend of candidates. A
+        <b>GRU decoder</b> then spells that seed into 5 letters, with a token-derived <b>hard consistency-mask</b>
+        that zeroes any letter contradicting the green/yellow/gray feedback. Trained on spelling + a
+        word-classification aux, then gentle KL-anchored RL.</p>
+      <p style="margin-bottom:0"><b>Result: 95.08% win, avg 3.54, 1.8% non-words</b> — a genuinely generative,
+        history-in / characters-out transformer, up from the ~51% ceiling of a marginal-conditioned generator.
+        The <b>soft→hard seed</b> was the unlock (BC 70%→94%): spelling one clean word is far easier than decoding
+        a blend. It's <i>within five points</i> of the selection classifier — the remaining gap is the word head's
+        candidacy (~95% vs 100%) plus noisy gradients through the hard pick, which is an RL/distillation problem, not
+        an architectural one. The classifier still wins outright (100% / 3.46); the cost of <i>generating</i> the
+        word rather than selecting it is those last few points.</p>
+    </div>
+
     <div class="diaglegend">
       <span><i class="in"></i>input / encoding</span>
       <span><i class="param"></i>learned parameters</span>

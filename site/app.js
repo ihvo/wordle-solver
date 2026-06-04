@@ -477,6 +477,33 @@ lineChart($("rlChart"),
     s += tag(560, 146, "feedback", g);
     set("archDecoder", svg(770, 312, m, s));
   })();
+
+  // Word-seed decoder — attend the vocabulary, pick one word, spell it as characters
+  (function () {
+    const m = "ahW", g = "#6b7075"; let s = "";
+    // row 1: encode the history → score words → hard-pick one
+    s += box(12, 22, 132, 48, "History tokens", "(g,fb)×≤5", "in");
+    s += box(160, 22, 166, 48, "Transformer enc.", "embed+pos · 3× · 4h", "param");
+    s += box(342, 22, 158, 48, "word head", "cross-attn · 2315", "param");
+    s += box(516, 22, 168, 48, "hard pick", "argmax (straight-through)", "op");
+    s += arrow(144, 46, 160, 46, m);
+    s += arrow(326, 46, 342, 46, m);
+    s += arrow(500, 46, 516, 46, m); s += tag(508, 16, "word logits", g);
+    // row 2: spell the selected word
+    s += box(12, 142, 132, 48, "word seed", "one word emb", "op");
+    s += box(160, 142, 124, 48, "state_proj", "→ GRU h₀", "param");
+    s += box(300, 142, 150, 48, "GRU decoder ×5", "spell letters", "param");
+    s += box(466, 142, 120, 48, "hard-mask", "feedback-consistent", "op");
+    s += box(602, 142, 100, 48, "word", "5 letters", "out");
+    s += arrow(144, 166, 160, 166, m);
+    s += arrow(284, 166, 300, 166, m); s += tag(292, 160, "h₀", g);
+    s += arrow(450, 166, 466, 166, m);
+    s += arrow(586, 166, 602, 166, m);
+    // bridge: hard pick → word seed (down the gap, then left)
+    s += `<path d="M600,70 L600,106 L78,106 L78,142" fill="none" stroke="#9aa0a6" stroke-width="1.5" marker-end="url(#${m})"/>`;
+    s += tag(360, 100, "selected word → seed", g);
+    set("archWordSeed", svg(716, 200, m, s));
+  })();
 })();
 
 /* ===================================================================== */

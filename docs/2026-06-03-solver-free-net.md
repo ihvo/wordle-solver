@@ -1,6 +1,6 @@
 # A solver-free net: playing from the tokens alone
 
-*Research log — 2026-06-03. Part 5 of 7. Previously:
+*Research log — 2026-06-03. Part 5 of 8. Previously:
 [entropy-teacher-and-cloned-policies](2026-06-01-entropy-teacher-and-cloned-policies.md) →
 [probing-and-openers](2026-06-02-probing-and-openers.md) →
 [rl-post-training-to-100](2026-06-02-rl-post-training-to-100.md) →

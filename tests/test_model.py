@@ -1,6 +1,7 @@
 """Shape and save/load tests for the policy and its ablation variants."""
 
 import torch
+from torch.nn import functional as F
 
 from wordle_guesser.encoding import CAND_DIM, MAX_LEN, WORD_LEN
 from wordle_guesser.model import (
@@ -161,6 +162,64 @@ def test_word_lm_decoder():
     assert m.dec.word_lm_logits(tgt).shape == (4, WORD_LEN, 26)
     tokens, mask, feats = _batch()
     assert m.generate(tokens, mask, feats).shape == (4, WORD_LEN)
+
+
+def test_constraint_mask_parses_feedback_from_tokens():
+    """The token-derived green/yellow/gray mask: greens fix a slot, grays are excluded
+    everywhere, present letters stay allowed elsewhere — no word list involved."""
+    from wordle_guesser.encoding import encode_state, pad_batch
+    from wordle_guesser.feedback import feedback_code
+    vocab = load_vocabulary()
+    m = WordlePolicy(PolicyConfig(n_words=N, use_history=True, use_candidates=False,
+                                  decoder=True, decoder_constraints=True)).eval()
+    code = feedback_code("slate", "crane")
+    tok = encode_state([vocab.encode("slate")], [code], vocab.letters)
+    tokens, _ = pad_batch([tok])
+    mask = m._constraint_mask(torch.from_numpy(tokens))[0]  # (5,26)
+    a, e = ord("a") - 97, ord("e") - 97
+    assert mask[2].argmax() == a and (mask[2] > 0).sum() == 1   # pos2 green -> only 'a'
+    assert mask[4].argmax() == e and (mask[4] > 0).sum() == 1   # pos4 green -> only 'e'
+    for p in (0, 1, 3):                                          # s,l,t grayed -> excluded
+        for c in "slt":
+            assert mask[p, ord(c) - 97] == 0
+
+
+def test_hard_mask_enforces_feedback_consistency():
+    """With hard-mask, every sampled guess respects the token-parsed green/yellow/gray
+    constraints — greens placed, grays banned everywhere — regardless of training."""
+    from wordle_guesser.encoding import encode_state, pad_batch
+    from wordle_guesser.feedback import feedback_code
+    vocab = load_vocabulary()
+    m = WordlePolicy(PolicyConfig(n_words=N, use_history=True, use_candidates=False, decoder=True,
+                                  decoder_hard_mask=True)).eval()
+    code = feedback_code("slate", "crane")  # pos2 green 'a', pos4 green 'e', s/l/t gray
+    tok = encode_state([vocab.encode("slate")], [code], vocab.letters)
+    tokens, kpm = pad_batch([tok] * 8)
+    lett, _ = m.decode_sample(torch.from_numpy(tokens), torch.from_numpy(kpm), torch.zeros(8, CAND_DIM))
+    words = ["".join(chr(97 + int(c)) for c in row) for row in lett]
+    assert all(w[2] == "a" and w[4] == "e" for w in words)             # greens forced
+    assert all(all(ch not in w for ch in "slt") for w in words)        # grays banned
+
+
+def test_word_seed_decoder_and_straight_through():
+    """The shipped 95% architecture: a cross-attention word head seeds a spelling decoder.
+    return_aux exposes per-word logits; play is history-only; hard selection still passes gradient."""
+    vocab = load_vocabulary()
+    m = WordlePolicy(PolicyConfig(n_words=N, use_history=True, use_candidates=False, decoder=True,
+                                  decoder_xattn=True, decoder_word_seed=True, decoder_word_seed_hard=True,
+                                  decoder_hard_mask=True), word_letters=vocab.letters[:N])
+    assert hasattr(m, "word_head")
+    tokens, mask, _ = _batch()
+    tgt = torch.randint(0, 26, (4, WORD_LEN))
+    logits, word_logits = m(tokens, mask, torch.zeros(4, CAND_DIM), target_letters=tgt, return_aux=True)
+    assert logits.shape == (4, WORD_LEN, 26) and word_logits.shape == (4, N)
+    F.cross_entropy(logits.reshape(-1, 26), tgt.reshape(-1)).backward()   # straight-through gradient
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in m.word_head.parameters())
+    m.eval()
+    with torch.no_grad():                                                # history-only at inference
+        a = m.generate(tokens, mask, torch.zeros(4, CAND_DIM))
+        b = m.generate(tokens, mask, torch.rand(4, CAND_DIM) * 9)
+    assert torch.equal(a, b) and a.shape == (4, WORD_LEN)
 
 
 def test_factored_head_forward_and_roundtrip(tmp_path):
