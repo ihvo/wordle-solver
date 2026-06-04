@@ -20,6 +20,7 @@
     <a class="step" href="#probing"><span class="dot"></span><span>The trap</span></a>
     <a class="step" href="#rl"><span class="dot"></span><span>RL → 100%</span></a>
     <a class="step" href="#railfree"><span class="dot"></span><span>Rail-free</span></a>
+    <a class="step" href="#decoder"><span class="dot"></span><span>Generate it</span></a>
     <a class="step" href="#models"><span class="dot"></span><span>Models</span></a>
     <a class="step" href="#play"><span class="dot"></span><span>Play it</span></a>
   </div>
@@ -350,15 +351,66 @@
 
 <div class="divider"></div>
 
+<!-- ===================== STAGE 7 — GENERATIVE DECODER ===================== -->
+<section id="decoder">
+  <div class="wrap reveal">
+    <div class="stage-tag">Stage 7 · Writing the word</div>
+    <h2>Generating, not choosing</h2>
+    <p class="lede">Every policy so far is a <b>classifier</b>: it scores all 2,315 answer words and takes
+      the argmax — a wrong "word" is impossible by construction. The next generation asks the opposite
+      question: can the net <b>write</b> the guess letter-by-letter, with <i>no vocabulary at all</i>? It can
+      then emit any of 26⁵ ≈ 12M strings — including non-words. Can it learn to stay valid <i>and</i> win?</p>
+
+    <div class="eli5">
+      <b>Why this is hard.</b> Drop the word head and decode 5 letters with a GRU. Two problems show up at once:
+      <b>validity</b> — nothing stops it emitting <code>birty</code>; and <b>exposure bias</b> — behavior cloning
+      teacher-forces the <i>true</i> previous letters, so the decoder never practises recovering from its own
+      prefixes, then drifts off the word manifold at play time.
+    </div>
+
+    <div class="card">
+      <p style="margin-top:0"><b>Three fixes, in order.</b> Let it roll out under <b>RL on its own outputs</b>
+        (it finally sees its own prefixes); then <b>condition each letter step on the per-slot candidate
+        marginals</b> — the live letter frequencies among surviving answers, fed in through <code>marg_proj</code>,
+        so it generates <i>toward</i> real in-set words (the big lever); then <b>more RL with a valid-word
+        bonus</b>. No trie, no mask, no allowed-word list anywhere in the loop.</p>
+      <table class="res">
+        <thead><tr><th>Generative decoder (no vocabulary)</th><th>Win</th><th>Non-words</th><th>Avg</th></tr></thead>
+        <tbody>
+          <tr><td>Teacher-forced BC</td><td class="num">33%</td><td class="num">41%</td><td class="num">—</td></tr>
+          <tr><td>+ RL on its own rollouts</td><td class="num">71%</td><td class="num">12%</td><td class="num">—</td></tr>
+          <tr class="win"><td>+ marginal conditioning + RL + valid-bonus <span class="badge">research variant</span></td><td class="num">99.44%</td><td class="num">0.08%</td><td class="num">3.55</td></tr>
+        </tbody>
+      </table>
+      <p class="note" style="margin-bottom:0">A pure generative, no-constraint head <b>competitive with the
+        classifiers</b> (~99.6%). Validity was never the hard part once conditioned — <b>0.08% non-words</b>.</p>
+    </div>
+
+    <div class="eli5">
+      <b>The honest part.</b> "Generation can't do a closed vocab" was wrong — it was <b>exposure bias plus
+      missing conditioning</b>, not the head. But there's a catch: the marginal conditioning that fixes validity
+      also steers <i>away</i> from non-candidate words — and a <b>probe</b> is exactly a non-candidate word. So
+      the same lever that solves validity <b>suppresses probing</b>, and the decoder caps right at the masked-play
+      ceiling: the last ~0.5% (13 losses) are the genuine neighbour-traps, not non-words — the same wall every
+      other policy hits, reached from the opposite direction. (An LM-prior pretrain and an explicit unlikelihood
+      penalty both <i>hurt</i>; beam search rescued the weak model but was redundant once it was confident.)
+      Research variant — the classifiers and the solver-free net remain the shipped policies.
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
 <!-- ===================== MODELS — ARCHITECTURES ===================== -->
 <section id="models">
   <div class="wrap reveal">
     <div class="stage-tag">Reference · Architectures</div>
     <h2>The models, side by side</h2>
-    <p class="lede">Four components appear across the stages: one exact solver, two small networks, and the
-      inference rule that wraps the final one. Here's what each looks like and what it does. All three
-      learned models share the same encoding — a 156-d candidate-set summary and (optionally) a tokenized
-      move history — and emit logits over the 2,315-word vocabulary.</p>
+    <p class="lede">Every component that appears across the stages, side by side: one exact solver, the
+      small networks, the inference rule that wraps them, and the generative head. Here's what each looks like
+      and what it does. The classifier models share the same encoding — a candidate-set summary and (optionally)
+      a tokenized move history — and emit logits over the 2,315-word vocabulary; the solver-free net reads only
+      the tokens, and the generative decoder writes the word letter-by-letter instead.</p>
 
     <!-- Entropy teacher -->
     <div class="card">
