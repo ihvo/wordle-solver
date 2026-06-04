@@ -222,6 +222,22 @@ def test_word_seed_decoder_and_straight_through():
     assert torch.equal(a, b) and a.shape == (4, WORD_LEN)
 
 
+def test_head_and_spell_logits_for_route_b():
+    """Route-B handles: head_logits exposes the word categorical; spell_logits detaches the
+    seed/history so a spelling loss trains only the decoder (head/encoder stay clean for PG)."""
+    vocab = load_vocabulary()
+    m = WordlePolicy(PolicyConfig(n_words=N, use_history=True, use_candidates=False, decoder=True,
+                                  decoder_xattn=True, decoder_word_seed=True, decoder_word_seed_hard=True),
+                     word_letters=vocab.letters[:N])
+    tokens, mask, _ = _batch()
+    assert m.head_logits(tokens, mask).shape == (4, N)
+    tgt = torch.randint(0, 26, (4, WORD_LEN))
+    F.cross_entropy(m.spell_logits(tokens, mask, tgt).reshape(-1, 26), tgt.reshape(-1)).backward()
+    # spelling grad reaches the decoder but NOT the word head (seed detached)
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in m.dec.parameters())
+    assert all(p.grad is None or p.grad.abs().sum() == 0 for p in m.word_head.parameters())
+
+
 def test_factored_head_forward_and_roundtrip(tmp_path):
     words = load_vocabulary().letters[:N]
     cfg = PolicyConfig(n_words=N, factored_head=True)

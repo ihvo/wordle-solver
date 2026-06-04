@@ -202,13 +202,18 @@ the raw policy (`policy_raw.pt`) playing pure argmax. The pattern matrix rebuild
    (+ token-derived `decoder_hard_mask`). Trained: spelling CE + word-classification aux, then gentle
    KL-anchored RL. Ladder: 51% → soft-seed BC 70%/RL 87% → **hard-seed BC 93.9% → +gentle RL 95.08% /
    3.54 / 1.8% invalid** (`models/policy_word_seed.pt`, 0.69M, history-only). The soft→hard seed is
-   the big jump (spelling one clean word ≫ decoding a blend). **Did not reach 99%:** the head plateaus
-   ~95% (encoder shared with the speller) and RL through the straight-through seed is noisy
-   (oscillates). What failed to close it: naive RL (regressed), frozen-classifier-head + fresh decoder
-   (frozen encoder starves the decoder xattn), warm-start joint (slow fresh decoder), KD from the
-   classifier (head↔decoder embedding coupling destabilizes). The plain **classifier still wins
-   outright (100%/3.46)** — the character-output constraint costs the last points; 99% generatively is
-   an RL/distillation-infra effort, not an architecture one. See memory `word-seed-decoder-95`.
+   the big jump (spelling one clean word ≫ decoding a blend). **Key diagnostic (route B,
+   `rl_word_seed.py` — clean categorical RL over the word head + `head_eval`):** the word **head
+   already decides at 99.44%** (its argmax-word play ≈ the classifier); the whole gap is **character
+   transcription.** The hard consistency-mask was double-duty harm — it *zeroed probe-word letters*
+   (probes win the traps) **and** was a crutch (turn it off cold → spelling collapses to 19%).
+   **Fix that shipped 97.28%:** drop `--hard-mask` and retrain an unaided speller via dense BC
+   (`--word-seed-hard`, warm head, differential lr) — 83%→97% in ~12 epochs, far faster than the
+   rollout-sparse route-B RL recovery. **Result: 97.28% / 3.55 / 0.9% invalid** (`policy_word_seed.pt`,
+   0.69M, history-only); the remaining ~2 pts are spelling fidelity (head ceiling 99.44%). Dead-ends:
+   naive RL (regressed), straight-through-seed RL (noisy/oscillates), frozen-classifier-head + fresh
+   decoder (frozen encoder starves the decoder xattn), KD (head↔decoder embedding coupling). The plain
+   **classifier still wins outright (100%/3.46)**. See memory `word-seed-decoder-95`.
 
 The model is essentially a learned ranker over the candidate set; the solver does the exact
 constraint propagation, and the net has learned to *probe* — under the rail (`policy_rl.pt`) or,
@@ -229,7 +234,7 @@ with C/R features, on its own (`policy_raw.pt`). See memory notes
 | `rl.py` | **RL post-training:** GRPO + teacher demos + BC anchor → `policy_rl.pt` (hybrid 100%). |
 | `dagger.py` | **DAgger:** imitate the hybrid expert with C/R features → `policy_raw.pt` (raw 100%). |
 | `rl_raw.py` | **Raw-GRPO** polish for the history-only (`--xattn`) net → solver-free 100%. |
-| `decoder.py` / `rl_decoder.py` | Generative letter-decoder head + its RL. Candidate-fed: `--marginal`/`--valid-bonus`/beam → 99.44% (`policy_decoder.pt`). Tokens-only: `--history-only`/`--xattn`/`--learned-marginal`/`--marg-attn`/`--word-lm`/`--constraints`/`--hard-mask` → ~43–51% (finding #8). Word-seed: `--word-seed[-hard]` (+`--init`/`--freeze-encoder`/`--init-lr-scale`/`--kd-teacher`) → 95% (finding #9, `policy_word_seed.pt`). `--val-frac` = TF-eval diagnostics. Not in CLI. |
+| `decoder.py` / `rl_decoder.py` | Generative letter-decoder head + its RL. Candidate-fed: `--marginal`/`--valid-bonus`/beam → 99.44% (`policy_decoder.pt`). Tokens-only: `--history-only`/`--xattn`/`--learned-marginal`/`--marg-attn`/`--word-lm`/`--constraints`/`--hard-mask` → ~43–51% (finding #8). Word-seed: `--word-seed[-hard]` (no `--hard-mask`!) + `--init`/`--init-lr-scale` → 97.28% (finding #9, `policy_word_seed.pt`). `rl_word_seed.py` = route B (clean categorical RL over the head + head-eval; revealed head=99.44%). `--val-frac` = TF-eval diagnostics. Not in CLI. |
 | `evaluate.py` | Batched full-vocab play; `probe_when_stuck` gives the hybrid; default `policy_raw.pt`. |
 | `policy.py` | Checkpoint → `GameState → guess` wrapper; auto-aug; `probe_when_stuck` rail. |
 | `cli.py` | Interactive solver (default = raw `policy_raw.pt`; `--rl`/`--safe`/`--bc`/`--mlp`). |

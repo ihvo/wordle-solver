@@ -334,6 +334,23 @@ class WordlePolicy(nn.Module):
             return (self._constraint_mask(tokens) > 0).float()
         return None
 
+    def head_logits(self, tokens, key_padding_mask) -> torch.Tensor:
+        """Word-head logits over the vocabulary — the candidacy classifier inside a word-seed
+        (or xattn) model. Lets RL optimise the *word* choice directly (clean categorical), with
+        the decoder left to spell the pick."""
+        hist = self._encode(tokens, key_padding_mask)
+        return self.word_head(hist, key_padding_mask)
+
+    def spell_logits(self, tokens, key_padding_mask, target_letters) -> torch.Tensor:
+        """Teacher-forced letter logits with the seed/history DETACHED — so a spelling loss trains
+        only the decoder, leaving the head/encoder to a clean policy gradient (route B)."""
+        hist = self._encode(tokens, key_padding_mask)
+        seed = self._word_seed(hist, key_padding_mask)[0].detach()
+        dh, dm = self._dec_hist(hist, key_padding_mask)
+        dh = dh.detach() if dh is not None else None
+        return self.dec(seed, target=target_letters, marg=self._dec_marg(None, None, None, tokens),
+                        hist=dh, hist_mask=dm, hmask=self._dec_hmask(tokens))
+
     def _word_seed(self, hist, key_padding_mask):
         """Cross-attention word head → (selected word embedding seed, per-word logits).
         Gives the decoder per-word (joint) candidacy instead of a per-slot marginal. In hard mode,

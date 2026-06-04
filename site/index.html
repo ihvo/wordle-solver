@@ -576,13 +576,15 @@
         <b>GRU decoder</b> then spells that seed into 5 letters, with a token-derived <b>hard consistency-mask</b>
         that zeroes any letter contradicting the green/yellow/gray feedback. Trained on spelling + a
         word-classification aux, then gentle KL-anchored RL.</p>
-      <p style="margin-bottom:0"><b>Result: 95.08% win, avg 3.54, 1.8% non-words</b> — a genuinely generative,
+      <p style="margin-bottom:0"><b>Result: 97.28% win, avg 3.55, 0.9% non-words</b> — a genuinely generative,
         history-in / characters-out transformer, up from the ~51% ceiling of a marginal-conditioned generator.
-        The <b>soft→hard seed</b> was the unlock (BC 70%→94%): spelling one clean word is far easier than decoding
-        a blend. It's <i>within five points</i> of the selection classifier — the remaining gap is the word head's
-        candidacy (~95% vs 100%) plus noisy gradients through the hard pick, which is an RL/distillation problem, not
-        an architectural one. The classifier still wins outright (100% / 3.46); the cost of <i>generating</i> the
-        word rather than selecting it is those last few points.</p>
+        Two unlocks: the <b>soft→hard seed</b> (BC 70%→94% — spelling one clean word beats decoding a blend), and
+        <b>dropping the consistency-mask</b> to retrain an unaided speller (95→97). The sharpest finding: the word
+        <b>head already <i>decides</i> at 99.44%</b> (its top-word play ≈ the classifier) — so the remaining ~2 points
+        are pure <b>character transcription</b>, not strategy. (The mask we'd added was actually <i>capping</i> us: it
+        banned the letters of the probe words that win the neighbour-traps.) The selection classifier still wins
+        outright (100% / 3.46); the cost of <i>generating</i> the word rather than selecting it is those last spelling
+        points.</p>
     </div>
 
     <div class="diaglegend">

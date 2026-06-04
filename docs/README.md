@@ -24,7 +24,8 @@ solver and the vocabulary entirely. Eight parts, read in order:
    11% → **43%** and *looks* capped — a generator can't do per-word candidacy via a per-slot marginal.
 8. **[The word-seed decoder](2026-06-04-word-seed-decoder.md)** — break that ceiling: give the
    generator per-word candidacy (a cross-attention word head) and have it *spell* the selected word
-   as characters. A straight-through hard seed takes a generative, history-in/characters-out
-   transformer to **95.08% / 3.54** — within five points of the selection classifier.
+   as characters. A straight-through hard seed + an unaided speller take a generative,
+   history-in/characters-out transformer to **97.28% / 3.55** — and the head's *decision* is already
+   **99.44%**, so the remaining gap is pure character transcription.
 
 Operational guide (how to build/train/run): [`../AGENTS.md`](../AGENTS.md).
