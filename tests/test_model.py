@@ -111,6 +111,58 @@ def test_decoder_roundtrip(tmp_path):
         )
 
 
+def test_history_only_decoder_ignores_candidate_features():
+    """Solver-free generative decoder: no candidate MLP, candidate features ignored."""
+    m = WordlePolicy(PolicyConfig(n_words=N, use_history=True, use_candidates=False, decoder=True)).eval()
+    assert not hasattr(m, "cand_proj")
+    tokens, mask, _ = _batch()
+    with torch.no_grad():
+        a = m.generate(tokens, mask, torch.zeros(4, CAND_DIM))
+        b = m.generate(tokens, mask, torch.rand(4, CAND_DIM) * 9)
+    assert torch.equal(a, b)
+
+
+def test_xattn_decoder_reads_the_history():
+    """The cross-attention decoder's output depends on the token sequence it attends."""
+    m = WordlePolicy(PolicyConfig(n_words=N, use_history=True, use_candidates=False,
+                                  decoder=True, decoder_xattn=True)).eval()
+    mask = torch.zeros(4, MAX_LEN, dtype=torch.bool)
+    feats = torch.zeros(4, CAND_DIM)
+    tgt = torch.randint(0, 26, (4, WORD_LEN))
+    t1, t2 = torch.randint(1, 78, (4, MAX_LEN)), torch.randint(1, 78, (4, MAX_LEN))
+    with torch.no_grad():
+        assert not torch.allclose(m(t1, mask, feats, target_letters=tgt),
+                                  m(t2, mask, feats, target_letters=tgt))
+
+
+def test_learned_marginal_decoder_is_solver_free():
+    """B/B2: the marginal is predicted from the encoder (return_aux), so play ignores
+    candidate features at inference — pooled and attention heads alike."""
+    for marg_attn in (False, True):
+        m = WordlePolicy(PolicyConfig(n_words=N, use_history=True, use_candidates=False, decoder=True,
+                                      decoder_xattn=True, decoder_learned_marginal=True,
+                                      decoder_marg_attn=marg_attn)).eval()
+        tokens, mask, _ = _batch()
+        tgt = torch.randint(0, 26, (4, WORD_LEN))
+        logits, marg_logits = m(tokens, mask, torch.zeros(4, CAND_DIM), target_letters=tgt, return_aux=True)
+        assert logits.shape == (4, WORD_LEN, 26) and marg_logits.shape == (4, WORD_LEN, 26)
+        with torch.no_grad():
+            a = m.generate(tokens, mask, torch.zeros(4, CAND_DIM))
+            b = m.generate(tokens, mask, torch.rand(4, CAND_DIM) * 9)
+        assert torch.equal(a, b)
+
+
+def test_word_lm_decoder():
+    """#2: the word-LM branch exists, scores real words, and play still produces 5 letters."""
+    m = WordlePolicy(PolicyConfig(n_words=N, use_history=True, use_candidates=False,
+                                  decoder=True, decoder_word_lm=True)).eval()
+    assert hasattr(m.dec, "lm_gru")
+    tgt = torch.randint(0, 26, (4, WORD_LEN))
+    assert m.dec.word_lm_logits(tgt).shape == (4, WORD_LEN, 26)
+    tokens, mask, feats = _batch()
+    assert m.generate(tokens, mask, feats).shape == (4, WORD_LEN)
+
+
 def test_factored_head_forward_and_roundtrip(tmp_path):
     words = load_vocabulary().letters[:N]
     cfg = PolicyConfig(n_words=N, factored_head=True)

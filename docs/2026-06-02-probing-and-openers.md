@@ -1,6 +1,6 @@
 # Research log — probing vs. openers (2026-06-02)
 
-*Research log — 2026-06-02. Author: Ihar + Clawd. Part 2 of 6. Previously: [entropy-teacher-and-cloned-policies](2026-06-01-entropy-teacher-and-cloned-policies.md). Next: [rl-post-training-to-100](2026-06-02-rl-post-training-to-100.md).*
+*Research log — 2026-06-02. Author: Ihar + Clawd. Part 2 of 7. Previously: [entropy-teacher-and-cloned-policies](2026-06-01-entropy-teacher-and-cloned-policies.md). Next: [rl-post-training-to-100](2026-06-02-rl-post-training-to-100.md).*
 
 How we tried to close the behavior-cloned model's gap to the entropy solver, what
 failed, and the one lever that worked. Numbers are measured over all 2315 answers unless

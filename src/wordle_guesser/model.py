@@ -33,11 +33,17 @@ class PolicyConfig:
     n_tokens: int = N_TOKENS
     cand_dim: int = CAND_DIM
     use_history: bool = True
+    use_candidates: bool = True  # feed the solver's candidate-set features; False = history-only (encoder) state
     factored_head: bool = False
     xattn: bool = False  # history-only: words cross-attend the encoded history (no candidate features)
     letter_count: bool = False  # add a per-token "how many of this letter in its guess" embedding (helps duplicates)
     decoder: bool = False  # generative head: emit the guess letter-by-letter (autoregressive) instead of a classifier
     decoder_marginal: bool = False  # feed per-position candidate letter frequencies into the decoder at each step
+    decoder_xattn: bool = False  # each decoder step cross-attends the encoded history (reads the full sequence, not a pooled seed)
+    decoder_learned_marginal: bool = False  # predict the candidate marginal from the encoder (aux-supervised) and feed it to the decoder — solver-free conditioning
+    decoder_marg_attn: bool = False  # B2: predict the marginal with per-slot learned queries cross-attending the history (not from the pooled seed)
+    decoder_word_lm: bool = False  # #2: product-of-experts with a learned 5-letter word-LM prior (parametric real-word manifold, no trie)
+    decoder_word_lm_alpha: float = 1.0  # weight of the word-LM logits in the product of experts
     opener: str | None = None  # fixed turn-1 word; the net can't learn a 1-example opening
 
 
@@ -86,9 +92,16 @@ class LetterDecoder(nn.Module):
     """Generative head: emit the 5-letter guess autoregressively (a GRU seeded by the
     state), one letter at a time, instead of a softmax over the word vocabulary. No
     vocabulary constraint — it can emit any 5-letter string, so it can also emit
-    non-words (the thing we measure)."""
+    non-words (the thing we measure).
 
-    def __init__(self, d: int, fusion_dim: int, use_marginal: bool = False):
+    With ``use_xattn`` each letter step also **cross-attends the encoded history**
+    (keys/values = the token sequence), so the decoder reads the full history rather
+    than decoding from a single pooled seed — the fix for the read-out bottleneck.
+    """
+
+    def __init__(self, d: int, fusion_dim: int, use_marginal: bool = False,
+                 use_xattn: bool = False, nhead: int = 4,
+                 use_word_lm: bool = False, word_lm_alpha: float = 1.0):
         super().__init__()
         self.state_proj = nn.Linear(fusion_dim, d)
         self.letter_emb = nn.Embedding(27, d)  # 0..25 = a..z, 26 = BOS
@@ -97,23 +110,62 @@ class LetterDecoder(nn.Module):
         self.use_marginal = use_marginal
         if use_marginal:  # per-position candidate letter frequencies, fed at each step
             self.marg_proj = nn.Linear(26, d)
+        self.use_xattn = use_xattn
+        if use_xattn:  # query the encoded history with the current hidden, each step
+            self.xattn = nn.MultiheadAttention(d, nhead, batch_first=True)
+        self.use_word_lm = use_word_lm
+        self.word_lm_alpha = word_lm_alpha
+        if use_word_lm:  # #2: a learned 5-letter word-LM, mixed in as a product-of-experts prior
+            self.lm_emb = nn.Embedding(27, d)
+            self.lm_gru = nn.GRUCell(d, d)
+            self.lm_out = nn.Linear(d, 26)
+            self.lm_h0 = nn.Parameter(torch.zeros(d))
 
-    def _inp(self, prev, marg, t):
+    def _inp(self, prev, marg, t, h, hist, hist_mask):
         x = self.letter_emb(prev)
         if self.use_marginal and marg is not None:
             x = x + self.marg_proj(marg[:, t])
+        if self.use_xattn and hist is not None:
+            ctx = self.xattn(h[:, None, :], hist, hist, key_padding_mask=hist_mask,
+                             need_weights=False)[0][:, 0]
+            x = x + ctx
         return x
 
-    def forward(self, z, target=None, marg=None, sample=False, temp=1.0):
-        """z (B, fusion_dim); marg (B,5,26) optional per-position candidate marginals.
+    def _lm_init(self, b, device):
+        return self.lm_h0[None].expand(b, -1).contiguous() if self.use_word_lm else None
+
+    def _combine(self, dec_logit, prev, lm_h):
+        """Product-of-experts: mix the candidacy logits with the word-LM prior, advancing
+        the LM on ``prev``. Returns (combined_logit, new_lm_h)."""
+        if not self.use_word_lm:
+            return dec_logit, lm_h
+        lm_h = self.lm_gru(self.lm_emb(prev), lm_h)
+        return dec_logit + self.word_lm_alpha * self.lm_out(lm_h), lm_h
+
+    def word_lm_logits(self, target_letters) -> torch.Tensor:
+        """Teacher-forced word-LM logits (B,5,26) on real words — for the manifold aux loss."""
+        b = target_letters.size(0)
+        lm_h = self._lm_init(b, target_letters.device)
+        prev = torch.full((b,), 26, dtype=torch.long, device=target_letters.device)
+        out = []
+        for t in range(WORD_LEN):
+            lm_h = self.lm_gru(self.lm_emb(prev), lm_h)
+            out.append(self.lm_out(lm_h))
+            prev = target_letters[:, t]
+        return torch.stack(out, 1)
+
+    def forward(self, z, target=None, marg=None, hist=None, hist_mask=None, sample=False, temp=1.0):
+        """z (B, fusion_dim); marg (B,5,26) optional per-position candidate marginals;
+        hist (B,L,d) / hist_mask (B,L) optional encoded history for cross-attention.
         With ``target`` (B,5) → teacher-forced logits (B,5,26); else (logits, letters)."""
         b = z.size(0)
         h = torch.tanh(self.state_proj(z))
+        lm_h = self._lm_init(b, z.device)
         prev = torch.full((b,), 26, dtype=torch.long, device=z.device)  # BOS
         logits, gen = [], []
         for t in range(WORD_LEN):
-            h = self.gru(self._inp(prev, marg, t), h)
-            lt = self.out(h)
+            h = self.gru(self._inp(prev, marg, t, h, hist, hist_mask), h)
+            lt, lm_h = self._combine(self.out(h), prev, lm_h)
             logits.append(lt)
             if target is not None:
                 prev = target[:, t]                                    # teacher forcing
@@ -123,15 +175,17 @@ class LetterDecoder(nn.Module):
         logits = torch.stack(logits, dim=1)
         return logits if target is not None else (logits, torch.stack(gen, dim=1))
 
-    def sample(self, z, marg=None, temp=1.0):
+    def sample(self, z, marg=None, hist=None, hist_mask=None, temp=1.0):
         """Sample a word autoregressively; return letters (B,5) and per-letter log-probs (B,5)."""
         b = z.size(0)
         h = torch.tanh(self.state_proj(z))
+        lm_h = self._lm_init(b, z.device)
         prev = torch.full((b,), 26, dtype=torch.long, device=z.device)
         lett, lps = [], []
         for t in range(WORD_LEN):
-            h = self.gru(self._inp(prev, marg, t), h)
-            lp = (self.out(h) / temp).log_softmax(-1)
+            h = self.gru(self._inp(prev, marg, t, h, hist, hist_mask), h)
+            lt, lm_h = self._combine(self.out(h), prev, lm_h)
+            lp = (lt / temp).log_softmax(-1)
             a = torch.multinomial(lp.exp(), 1).squeeze(1)
             lett.append(a); lps.append(lp.gather(1, a[:, None]).squeeze(1))
             prev = a
@@ -170,16 +224,35 @@ class WordlePolicy(nn.Module):
             self.word_head = CrossAttnWordHead(d, config.n_words, config.nhead, word_letters)
             return
 
-        # --- candidate-set path (always, unless xattn) ---
-        self.cand_proj = nn.Sequential(
-            nn.Linear(config.cand_dim, d), nn.GELU(), nn.Linear(d, d)
-        )
+        # --- candidate-set path (unless xattn or history-only) ---
+        if not (config.use_history or config.use_candidates):
+            raise ValueError("policy needs history tokens or candidate features (or xattn)")
+        if config.use_candidates:
+            self.cand_proj = nn.Sequential(
+                nn.Linear(config.cand_dim, d), nn.GELU(), nn.Linear(d, d)
+            )
 
         # --- output head ---
-        fusion_dim = d * (2 if config.use_history else 1)
+        n_parts = (1 if config.use_history else 0) + (1 if config.use_candidates else 0)
+        fusion_dim = d * n_parts
         if config.decoder:
             # generative: emit the guess letter-by-letter from the fused state
-            self.dec = LetterDecoder(d, fusion_dim, use_marginal=config.decoder_marginal)
+            if (config.decoder_xattn or config.decoder_learned_marginal) and not config.use_history:
+                raise ValueError("decoder_xattn / decoder_learned_marginal need the history encoder")
+            self.dec = LetterDecoder(
+                d, fusion_dim,
+                use_marginal=config.decoder_marginal or config.decoder_learned_marginal,
+                use_xattn=config.decoder_xattn, nhead=config.nhead,
+                use_word_lm=config.decoder_word_lm, word_lm_alpha=config.decoder_word_lm_alpha)
+            if config.decoder_learned_marginal:
+                if config.decoder_marg_attn:
+                    # B2: one learned query per slot cross-attends the history → per-slot marginal
+                    self.marg_query = nn.Parameter(torch.randn(WORD_LEN, d) * 0.02)
+                    self.marg_attn = nn.MultiheadAttention(d, config.nhead, batch_first=True)
+                    self.marg_out = nn.Linear(d, 26)
+                else:
+                    # B1: predict the per-slot candidate marginal (5×26) from the START read-out
+                    self.marg_head = nn.Sequential(nn.Linear(d, d), nn.GELU(), nn.Linear(d, WORD_LEN * 26))
         elif config.factored_head:
             # Each word is scored by <state, sum of its (position, letter) embeddings>.
             self.letter_emb = nn.Embedding(WORD_LEN * 26, d)
@@ -215,57 +288,100 @@ class WordlePolicy(nn.Module):
             x = x + self.count_emb(self._letter_counts(tokens))
         return x
 
-    def _state(self, tokens, key_padding_mask, cand_feats) -> torch.Tensor:
-        """The fused state vector the head reads (candidate-feature path)."""
+    def _encode(self, tokens, key_padding_mask):
+        """Full encoded history sequence (B,L,d), or None if there's no history branch."""
+        if not self.config.use_history:
+            return None
+        return self.encoder(self._embed(tokens), src_key_padding_mask=key_padding_mask)
+
+    def _fuse(self, hist, cand_feats) -> torch.Tensor:
+        """Pool the encoded history (START read-out) and/or candidate features into the state."""
         parts = []
         if self.config.use_history:
-            x = self.encoder(self._embed(tokens), src_key_padding_mask=key_padding_mask)
-            parts.append(self.norm(x[:, 0]))  # START summary
-        parts.append(self.cand_proj(cand_feats))
+            parts.append(self.norm(hist[:, 0]))  # START summary
+        if self.config.use_candidates:
+            parts.append(self.cand_proj(cand_feats))
         return torch.cat(parts, dim=-1) if len(parts) > 1 else parts[0]
 
-    def forward(self, tokens, key_padding_mask, cand_feats, target_letters=None) -> torch.Tensor:
+    def _state(self, tokens, key_padding_mask, cand_feats) -> torch.Tensor:
+        """The fused state vector the head reads (candidate-feature path)."""
+        return self._fuse(self._encode(tokens, key_padding_mask), cand_feats)
+
+    def _dec_hist(self, hist, key_padding_mask):
+        """History sequence + mask for the decoder's cross-attention, or (None, None)."""
+        if self.config.decoder_xattn:
+            return hist, key_padding_mask
+        return None, None
+
+    def forward(self, tokens, key_padding_mask, cand_feats, target_letters=None, return_aux=False):
         """tokens (B,L) long; mask (B,L) bool True=pad; cand_feats (B,156) -> (B,n_words).
 
         In ``xattn`` mode ``cand_feats`` is ignored — the policy reads only the history.
         In ``decoder`` mode with ``target_letters`` (B,5) → teacher-forced (B,5,26) logits.
+        With ``return_aux`` and a learned marginal, also returns the predicted-marginal logits.
         """
         if self.config.xattn:
             hist = self.encoder(self._embed(tokens), src_key_padding_mask=key_padding_mask)
             return self.word_head(hist, key_padding_mask)
 
-        z = self._state(tokens, key_padding_mask, cand_feats)
+        hist = self._encode(tokens, key_padding_mask)
+        z = self._fuse(hist, cand_feats)
         if self.config.decoder:
-            return self.dec(z, target=target_letters, marg=self._dec_marg(cand_feats))  # (B,5,26)
+            dh, dm = self._dec_hist(hist, key_padding_mask)
+            logits = self.dec(z, target=target_letters,
+                              marg=self._dec_marg(cand_feats, hist, key_padding_mask),
+                              hist=dh, hist_mask=dm)  # (B,5,26)
+            if return_aux:
+                return logits, self._marg_logits(hist, key_padding_mask)
+            return logits
         if self.config.factored_head:
             state = self.head_proj(z)
             return state @ self._word_embeddings().t() + self.word_bias
         return self.head(z)
 
-    def _dec_marg(self, cand_feats):
-        """Per-position candidate letter marginals (B,5,26) for the decoder, or None.
-        The first 130 feature dims are exactly the 5×26 per-slot frequencies."""
-        if not self.config.decoder_marginal:
-            return None
-        return cand_feats[:, : WORD_LEN * 26].reshape(-1, WORD_LEN, 26)
+    def _marg_logits(self, hist, hist_mask=None) -> torch.Tensor:
+        """Predicted per-slot candidate-marginal logits (B,5,26), self-derived from tokens."""
+        if self.config.decoder_marg_attn:  # B2: slot queries cross-attend the history
+            q = self.marg_query[None].expand(hist.size(0), -1, -1)        # (B,5,d)
+            ctx = self.marg_attn(q, hist, hist, key_padding_mask=hist_mask, need_weights=False)[0]
+            return self.marg_out(ctx)                                     # (B,5,26)
+        return self.marg_head(self.norm(hist[:, 0])).reshape(-1, WORD_LEN, 26)  # B1: from pooled seed
+
+    def _dec_marg(self, cand_feats, hist=None, hist_mask=None):
+        """Per-position marginals (B,5,26) fed to the decoder, or None.
+        Learned: softmax of the predicted head (solver-free, self-derived from tokens).
+        Else: the solver's per-slot frequencies (first 130 candidate-feature dims)."""
+        if self.config.decoder_learned_marginal:
+            return self._marg_logits(hist, hist_mask).softmax(-1)
+        if self.config.decoder_marginal:
+            return cand_feats[:, : WORD_LEN * 26].reshape(-1, WORD_LEN, 26)
+        return None
 
     @torch.no_grad()
     def generate(self, tokens, key_padding_mask, cand_feats, sample=False, temp=1.0):
         """Autoregressively emit the guess letters (B,5) — decoder mode only."""
-        z = self._state(tokens, key_padding_mask, cand_feats)
-        _logits, gen = self.dec(z, target=None, marg=self._dec_marg(cand_feats), sample=sample, temp=temp)
+        hist = self._encode(tokens, key_padding_mask)
+        z = self._fuse(hist, cand_feats)
+        dh, dm = self._dec_hist(hist, key_padding_mask)
+        _logits, gen = self.dec(z, target=None, marg=self._dec_marg(cand_feats, hist, key_padding_mask),
+                                hist=dh, hist_mask=dm, sample=sample, temp=temp)
         return gen
 
     @torch.no_grad()
     def decode_sample(self, tokens, key_padding_mask, cand_feats, temp=1.0):
         """Sample a guess letter-by-letter; return letters (B,5) and per-letter logps (B,5)."""
-        z = self._state(tokens, key_padding_mask, cand_feats)
-        return self.dec.sample(z, marg=self._dec_marg(cand_feats), temp=temp)
+        hist = self._encode(tokens, key_padding_mask)
+        z = self._fuse(hist, cand_feats)
+        dh, dm = self._dec_hist(hist, key_padding_mask)
+        return self.dec.sample(z, marg=self._dec_marg(cand_feats, hist, key_padding_mask),
+                               hist=dh, hist_mask=dm, temp=temp)
 
     @torch.no_grad()
     def generate_beam(self, tokens, key_padding_mask, cand_feats, beam=8):
         """Beam search over the decoder (no vocab constraint) — return the highest joint
         log-prob 5-letter word per game (B,5). Pure better decoding of the model itself."""
+        if self.config.decoder_xattn or self.config.decoder_learned_marginal or self.config.decoder_word_lm:
+            raise NotImplementedError("beam search not wired for the cross-attention / learned-marginal / word-LM decoder")
         dec = self.dec
         z = self._state(tokens, key_padding_mask, cand_feats)
         marg = self._dec_marg(cand_feats)                                 # (B,5,26) or None

@@ -180,6 +180,20 @@ the raw policy (`policy_raw.pt`) playing pure argmax. The pattern matrix rebuild
    explicit unlikelihood penalty both *hurt* — conditioning beat them. Research variant (eval via
    `decoder.eval_decoder`), not wired into the CLI; classifiers/xattn remain the shipped policies.
    See memory `generative-decoder-closed-vocab`.
+8. **Generation from tokens alone caps ~43% — generators can't do per-word candidacy (sidebar).**
+   The hard combination of Part 5 (tokens-only) and Part 6 (no vocabulary): a letter decoder fed
+   *only* the token history — no candidate features, no marginals, no trie. Climbed it one named
+   wall at a time, all RL'd: bare **11%** → `--xattn` (decoder cross-attends the history, fixes the
+   read-out) **30%** → `--learned-marginal` (predict the candidate marginal from tokens,
+   aux-supervised by the solver; ~72% per-slot, solver-free at inference) **36%** → `--word-lm`
+   (a learned 5-letter word-LM mixed in as product-of-experts, parametric/no trie) **42.7%**.
+   Diagnosis method: read `trainCE` vs **teacher-forced val CE** (no gap → not capacity) and
+   **TF exact-word accuracy** (read-out limit, isolated from exposure bias) — `decoder.py
+   --val-frac`. The wall that doesn't move: soft validity has a floor (~22% invalid; only a trie
+   zeroes it) and **per-slot conditioning ≠ per-word candacy** (the marginal is identical for
+   candidate sets needing different guesses). For 99% from tokens use the **cross-attn classifier**
+   (`policy_xattn.pt`, 100%); a generator hits 99% only by containing a classifier. Research
+   variant, nothing shipped. See memory `generative-from-tokens-caps-low`.
 
 The model is essentially a learned ranker over the candidate set; the solver does the exact
 constraint propagation, and the net has learned to *probe* — under the rail (`policy_rl.pt`) or,
@@ -194,13 +208,13 @@ with C/R features, on its own (`policy_raw.pt`). See memory notes
 | `feedback.py` | Green/yellow/gray with correct duplicate handling; scalar + vectorized. |
 | `solver.py` | Pattern matrix, vectorized entropy selection, candidate filtering, game env, teacher. |
 | `encoding.py` | `encode_state` + `candidate_features` (156-d; +C/R → 170-d `CAND_DIM_AUG`). |
-| `model.py` | `WordlePolicy` (`use_history`/`factored_head`/`xattn`/`letter_count`/`decoder`) + `CrossAttnWordHead`/`LetterDecoder` + save/load. |
+| `model.py` | `WordlePolicy` (`use_history`/`use_candidates`/`factored_head`/`xattn`/`letter_count`/`decoder`/`decoder_xattn`/`decoder_learned_marginal`/`decoder_marg_attn`/`decoder_word_lm`) + `CrossAttnWordHead`/`LetterDecoder` + save/load. |
 | `dataset.py` | Self-play → blended soft-target examples; `--state-aug` for 170-d features. |
 | `train.py` | Soft-CE (BC) loop; `--init` warm-start; `--xattn`/`--letter-count`; `--select-play` (rank on win rate). |
 | `rl.py` | **RL post-training:** GRPO + teacher demos + BC anchor → `policy_rl.pt` (hybrid 100%). |
 | `dagger.py` | **DAgger:** imitate the hybrid expert with C/R features → `policy_raw.pt` (raw 100%). |
 | `rl_raw.py` | **Raw-GRPO** polish for the history-only (`--xattn`) net → solver-free 100%. |
-| `decoder.py` / `rl_decoder.py` | Generative letter-decoder head (`decoder`/`decoder_marginal`) + its RL (`--marginal`, `--valid-bonus`, beam). Reaches 99.44% (`policy_decoder.pt`); not in CLI. |
+| `decoder.py` / `rl_decoder.py` | Generative letter-decoder head + its RL. Candidate-fed: `--marginal`/`--valid-bonus`/beam → 99.44% (`policy_decoder.pt`). Tokens-only study: `--history-only`/`--xattn`/`--learned-marginal`/`--marg-attn`/`--word-lm` + `--val-frac` diagnostics → caps ~43% (finding #8). Not in CLI. |
 | `evaluate.py` | Batched full-vocab play; `probe_when_stuck` gives the hybrid; default `policy_raw.pt`. |
 | `policy.py` | Checkpoint → `GameState → guess` wrapper; auto-aug; `probe_when_stuck` rail. |
 | `cli.py` | Interactive solver (default = raw `policy_raw.pt`; `--rl`/`--safe`/`--bc`/`--mlp`). |
